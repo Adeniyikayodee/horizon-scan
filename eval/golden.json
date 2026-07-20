@@ -1,0 +1,26 @@
+{
+  "_note": "Golden set for the trajectory eval. Each org lists the domain its real work lives on and keywords its genuine recent programs mention. Metrics: did Scout hit the org's own domain (grounding), and how much of the expected substance did it recover.",
+  "orgs": [
+    {
+      "name": "African Economic Research Consortium (AERC)",
+      "type": "African policy institute",
+      "region": "Africa",
+      "expect_domains": ["aercafrica.org"],
+      "expect_keywords": ["research", "collaborative", "policy", "capacity", "climate", "digital"]
+    },
+    {
+      "name": "UN Trade and Development (UNCTAD)",
+      "type": "Multilateral",
+      "region": "Global",
+      "expect_domains": ["unctad.org"],
+      "expect_keywords": ["etrade", "readiness", "investment", "digital", "productive", "trade"]
+    },
+    {
+      "name": "Policy Center for the New South",
+      "type": "African policy institute",
+      "region": "Africa",
+      "expect_domains": ["policycenter.ma"],
+      "expect_keywords": ["atlantic", "africa", "economic", "report", "trade", "development"]
+    }
+  ]
+}
