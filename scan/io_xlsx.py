@@ -3,6 +3,8 @@ the stage-2 deliverables. Uses openpyxl directly to control author metadata.
 """
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,97 @@ from openpyxl import Workbook, load_workbook
 from . import config, guardrail
 
 AUTHOR = "Kayode Adeniyi"
+
+# descriptor words dropped before matching, so trivial variants of the same
+# organization collapse while distinct organizations do not
+_ORG_STOP = {"the", "and", "of", "for", "a", "an", "group", "ltd", "limited", "inc",
+             "llc", "foundation", "fund", "institute", "initiative", "organization",
+             "organisation", "org"}
+
+
+def _norm_org(name: str) -> str:
+    """The normalized full-name key: lowercased, parentheticals dropped, punctuation
+    flattened, and descriptor words removed. If a name is made ENTIRELY of descriptor
+    words ('The Fund'), the stripped form falls back to the full token list so the
+    organization is never reduced to an empty key and silently dropped."""
+    s = re.sub(r"\([^)]*\)", " ", (name or "").lower())     # drop "(AERC)" etc.
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    toks = s.split()
+    kept = [t for t in toks if t not in _ORG_STOP]
+    return " ".join(kept or toks).strip()
+
+
+def _org_sig(name: str) -> dict:
+    """A match signature: the normalized full name, the acronym the organization
+    DECLARES in parentheses, the acronym DERIVED from its initials, and whether the
+    name is itself a bare acronym. Keeping declared and derived apart lets 'AfDB'
+    match 'African Development Bank (AfDB)' and 'ADB' match 'Asian Development Bank
+    (ADB)' without either bare acronym colliding with the other bank."""
+    low = (name or "").lower()
+    declared = {re.sub(r"[^a-z0-9]+", "", p) for p in re.findall(r"\(([^)]*)\)", low)}
+    declared = {a for a in declared if 2 <= len(a) <= 8}
+    base = _norm_org(name)
+    words = base.split()
+    derived = {"".join(w[0] for w in words)} if len(words) >= 2 else set()
+    is_acro = len(words) == 1 and base.isalpha() and 2 <= len(base) <= 8
+    return {"base": base, "declared": declared, "derived": derived, "is_acro": is_acro}
+
+
+def _acro_hits(a: dict, b: dict) -> bool:
+    """Does bare-acronym `a` name full-name `b`? Only when `a` equals `b`'s declared
+    acronym, or `b` declares none and `a` equals `b`'s initials."""
+    if not a["is_acro"]:
+        return False
+    return a["base"] in b["declared"] or (not b["declared"] and a["base"] in b["derived"])
+
+
+def _same_org(a: dict, b: dict) -> bool:
+    if not a["base"] or not b["base"]:
+        return False
+    if a["base"] == b["base"]:                              # same full name (or same acronym)
+        return True
+    return _acro_hits(a, b) or _acro_hits(b, a)
+
+
+def merge_orgs(primary: list[dict], additions: list[dict]) -> list[dict]:
+    """Join two organization lists into one deduped roster with provenance. Order is
+    stable: the primary list first, then analyst-only additions appended. On a match
+    the entry is kept once, marked as coming from both when the sides differ, and any
+    field the entry was missing is filled from the other, so no analyst detail is
+    lost. Every returned org carries a `source` (discovered, analyst, or both) and
+    ids are reassigned contiguously."""
+    out: list[dict] = []
+    sigs: list[dict] = []
+
+    def absorb(o: dict, src: str) -> None:
+        sig = _org_sig(o.get("name", ""))
+        if not sig["base"]:
+            return
+        for i, existing in enumerate(sigs):
+            if _same_org(sig, existing):
+                e = out[i]
+                for f in ("type", "region", "why"):
+                    if not (e.get(f) or "").strip() and (o.get(f) or "").strip():
+                        e[f] = o[f]
+                if e["source"] != src:
+                    e["source"] = "both"
+                existing["declared"] |= sig["declared"]     # remember both spellings
+                existing["derived"] |= sig["derived"]
+                return
+        m = dict(o)
+        m["source"] = (o.get("source") or "").strip() or src   # keep an existing label
+        if m["source"] == "analyst" and not (m.get("why") or "").strip():
+            m["why"] = "Added by the analyst."
+        out.append(m)
+        sigs.append(sig)
+
+    for o in primary:
+        absorb(o, "discovered")
+    for o in additions:
+        absorb(o, "analyst")
+    for i, o in enumerate(out, start=1):
+        o["id"] = f"O{i:03d}"
+    return out
 
 
 def _stamp(wb: Workbook) -> None:
@@ -33,6 +126,22 @@ def read_orgs(path: Path | None = None) -> list[dict[str, str]]:
         d.setdefault("id", f"O{i:03d}")
         orgs.append(d)
     return orgs
+
+
+def write_orgs_list(orgs: list[dict], path: Path | None = None) -> Path:
+    """Write a discovered organization list to xlsx (editable by the researcher)."""
+    path = path or config.ORG_SHEET
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "organizations"
+    ws.append(["id", "name", "type", "region", "why", "source"])
+    for i, o in enumerate(orgs, start=1):
+        ws.append([f"O{i:03d}", o.get("name", ""), o.get("type", ""), o.get("region", ""),
+                   o.get("why", ""), o.get("source", "")])
+    _stamp(wb)
+    wb.save(path)
+    return path
 
 
 def write_sample_orgs(path: Path | None = None) -> Path:
@@ -60,41 +169,66 @@ def write_longlist(rows: list[dict[str, Any]]) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = "longlist"
-    cols = ["keep", "org", "approach", "band", "what", "year", "mandate_fit",
-            "research_to_policy", "african_traction", "white_space", "overall",
-            "verification", "source"]
+    crit = config.active_spec().get("criteria", [])
+    cols = (["rid", "keep", "org", "approach", "band", "what", "year"]
+            + [c["name"] for c in crit] + ["overall", "verification", "source"])
     ws.append(cols)
-    for r in rows:
-        s = r.get("score", {})
-        v = r.get("verification", {})
-        ws.append([
-            "Y", r.get("org", ""), r.get("name", ""), r.get("band", ""), r.get("what", ""), r.get("year", ""),
-            s.get("mandate_fit", ""), s.get("research_to_policy", ""),
-            s.get("african_traction", ""), s.get("white_space", ""), s.get("overall", ""),
-            v.get("status", ""), r.get("url", ""),
-        ])
+    for i, r in enumerate(rows, start=1):
+        r.setdefault("rid", f"R{i:04d}")                 # stable id for the stage-2 rejoin
+        s = r.get("score", {}) or {}
+        v = r.get("verification", {}) or {}
+        row = [r["rid"], "Y", r.get("org", ""), r.get("name", ""), r.get("band", ""),
+               r.get("what", ""), r.get("year", "")]
+        row += [s.get(c["key"], "") for c in crit]
+        row += [s.get("overall", ""), v.get("status", ""), r.get("url", "")]
+        ws.append(row)
     _stamp(wb)
     wb.save(path)
+    # persist the FULL rows so stage two can rejoin evidence, quotes, and scores that
+    # do not fit the review sheet, keyed by the same rid
+    (config.WORK_DIR / "longlist_full.json").write_text(
+        json.dumps(rows, ensure_ascii=False), encoding="utf-8")
     return path
 
 
+def _full_rows_by_rid() -> dict[str, dict]:
+    p = config.WORK_DIR / "longlist_full.json"
+    if not p.exists():
+        return {}
+    return {r.get("rid", ""): r for r in json.loads(p.read_text(encoding="utf-8"))}
+
+
 def read_kept_longlist() -> list[dict[str, Any]]:
+    """The kept rows for stage two. The human keep decision and any cell edits come
+    from the review workbook, but the full evidence, quotes, and score marks are
+    rejoined from the persisted stage-one rows by their stable rid, so the memo and
+    the theming see the whole record rather than the thin review view."""
     path = config.REVIEW_DIR / "longlist.xlsx"
     wb = load_workbook(path, read_only=True)
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
-    header = [str(c).strip().lower() for c in rows[0]]
-    kept = []
+    header = [str(c).strip().lower() if c else "" for c in rows[0]]
+    full_by_rid = _full_rows_by_rid()
+    kept: list[dict[str, Any]] = []
     for r in rows[1:]:
         d = {header[j]: v for j, v in enumerate(r) if j < len(header)}
-        if str(d.get("keep", "")).strip().upper() == "Y":
-            kept.append({
-                "org": d.get("org", ""), "name": d.get("approach", ""),
-                "band": d.get("band", ""), "what": d.get("what", ""),
-                "overall": d.get("overall", ""), "year": d.get("year", ""),
-                "url": d.get("source", ""),
-                "verification": {"status": d.get("verification", "")},
-            })
+        if str(d.get("keep", "")).strip().upper() != "Y":
+            continue
+        base = dict(full_by_rid.get(str(d.get("rid", "") or ""), {}))
+        # overlay the analyst's cell edits from the review sheet onto the full row,
+        # so human corrections win while evidence, quotes, and scores are preserved
+        row = {**base,
+               "org": d.get("org", "") or base.get("org", ""),
+               "name": d.get("approach", "") or base.get("name", ""),
+               "band": d.get("band", "") or base.get("band", ""),
+               "what": d.get("what", "") or base.get("what", ""),
+               "overall": d.get("overall", "") or base.get("overall", ""),
+               "year": d.get("year", "") or base.get("year", ""),
+               "url": d.get("source", "") or base.get("url", "")}
+        vstatus = str(d.get("verification", "") or "").strip()
+        row["verification"] = {**(base.get("verification") or {}),
+                               **({"status": vstatus} if vstatus else {})}
+        kept.append(row)
     return kept
 
 
@@ -135,15 +269,13 @@ def write_scorecard(themes: list[dict[str, Any]], intro: str) -> Path:
     ws.title = "Theme scorecard"
     ws.append([intro])
     ws.append([])
-    cols = ["Theme", "Standing", "Mandate fit", "Research to policy",
-            "African traction", "White space", "Posture", "Evidence", "Top area", "Marquee"]
+    crit = config.active_spec().get("criteria", [])
+    cols = ["Theme", "Standing"] + [c["name"] for c in crit] + ["Posture", "Evidence", "Top area", "Marquee"]
     ws.append(cols)
     for t in themes:
-        ws.append([
-            t["name"], t["tag"], t["mandate_fit"], t["research_to_policy"],
-            t["african_traction"], t["white_space"], t["posture"], t.get("evidence", ""),
-            "yes" if t.get("top2") else "", t.get("marquee", ""),
-        ])
+        row = [t.get("name", ""), t.get("tag", "")] + [t.get(c["key"], "") for c in crit]
+        row += [t.get("posture", ""), t.get("evidence", ""), "yes" if t.get("top2") else "", t.get("marquee", "")]
+        ws.append(row)
     _stamp(wb)
     wb.save(path)
     return path
