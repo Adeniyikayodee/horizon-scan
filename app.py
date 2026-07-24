@@ -9,17 +9,15 @@ Deploy:        Streamlit Community Cloud or Hugging Face Spaces, set secrets.
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import os
 import re
 import uuid
-import zipfile
 
 import pandas as pd
 import streamlit as st
 
-from scan import config, io_xlsx, pdf_out, pipeline, sources
+from scan import agents, client, config, io_xlsx, pdf_out, pipeline, sources, spec
 
 
 def _secret(key: str, default: str = "") -> str:
@@ -228,8 +226,8 @@ def card_html(r: dict) -> str:
         m = s.get(f, "")
         return f'<span class="hs-mark {m}">{m}</span>'
 
-    marks = (f'mandate {mk("mandate_fit")} &nbsp;·&nbsp; policy {mk("research_to_policy")} '
-             f'&nbsp;·&nbsp; traction {mk("african_traction")} &nbsp;·&nbsp; white space {mk("white_space")}')
+    marks = " &nbsp;·&nbsp; ".join(f'{c["name"].lower()} {mk(c["key"])}'
+                                   for c in config.active_spec().get("criteria", []))
     quotes = "".join(f'<div class="hs-quote">"{q}"</div>' for q in r.get("quotes", []))
     url = r.get("url", "")
     src_label = "Source PDF" if url.lower().endswith(".pdf") else "Source page"
@@ -237,8 +235,16 @@ def card_html(r: dict) -> str:
     # where + a system-stamped access date (never the model's guess)
     where = f'<div class="hs-kv"><b>Where.</b> {r.get("locator","")}</div>' if r.get("locator") else ""
     acc, src_dated = r.get("accessed", ""), r.get("access_note", "")
-    accessed = (f'<div class="hs-kv"><b>Accessed.</b> {acc}'
-                + (f' &nbsp;·&nbsp; source dated {src_dated}' if src_dated else "") + "</div>") if acc else ""
+    yr = r.get("source_year")
+    win = f"{config.YEAR_MIN}&ndash;{config.YEAR_MAX}"
+    # date signal: confirmed in the recency window, or undated (flagged, not silent)
+    if yr:
+        datechip = f' &nbsp;·&nbsp; <span style="color:var(--good)">source dated {yr}, in {win}</span>'
+    elif r.get("date_status") == "undated":
+        datechip = f' &nbsp;·&nbsp; <span style="color:var(--bad)">date not confirmed in {win}</span>'
+    else:
+        datechip = (f' &nbsp;·&nbsp; source dated {src_dated}' if src_dated else "")
+    accessed = (f'<div class="hs-kv"><b>Accessed.</b> {acc}' + datechip + "</div>") if acc else ""
     # how it searched
     q = r.get("queries", []) or (r.get("trail", {}).get("scout", {}) or {}).get("queries", [])
     how = (f'<div class="hs-kv"><b>How it searched.</b> ' + "; ".join(q) + '</div>') if q else ""
@@ -268,8 +274,20 @@ def card_html(r: dict) -> str:
     flags = r.get("flags", [])
     flags_html = (f'<div class="hs-kv" style="color:var(--bad)"><b>Needs a look.</b> ' + "; ".join(flags) + '</div>') if flags else ""
 
+    if r.get("report_title"):
+        rt = r.get("report_title", "") + (f' ({r.get("report_date","")})' if r.get("report_date") else "")
+        if r.get("source_reachable") is False:  # matched a report but could not open it
+            report_html = (f'<div class="hs-kv" style="color:var(--muted)"><b>Report link.</b> {rt} '
+                           "&mdash; could not be opened directly, read from search results instead</div>")
+        else:
+            report_html = f'<div class="hs-kv"><b>Read from report.</b> {rt}</div>'
+    else:
+        report_html = ""
     src = (f'<div class="hs-kv" style="margin-top:6px"><b>{src_label}.</b> '
            f'<a href="{url}" target="_blank">{url}</a></div>' if url else "")
+    reach_html = ('<div class="hs-kv" style="color:var(--bad)"><b>Coverage note.</b> the source '
+                  'could not be read directly, this row rests on search results</div>'
+                  if r.get("source_reachable") is False else "")
     return (f'<div class="hs-card"><div class="an">{r.get("name","")} &nbsp;{chip}{flagchip} {bandchip}</div>'
             + provenance_html(r)
             + f'<div class="hs-kv"><b>What it is.</b> {r.get("what","")}</div>'
@@ -277,7 +295,7 @@ def card_html(r: dict) -> str:
             + f'<div class="hs-kv">{marks}</div>' + basis + where + accessed + how
             + (f'<div class="hs-kv" style="margin-top:6px"><b>Lines it took, straight from the source:</b></div>{quotes}'
                if quotes else "")
-            + conf_html + ground_html + fig + disc_html + audit_html + flags_html + src + '</div>')
+            + conf_html + ground_html + fig + disc_html + audit_html + flags_html + report_html + src + reach_html + '</div>')
 
 
 def dossier_md(r: dict) -> str:
@@ -296,7 +314,10 @@ def dossier_md(r: dict) -> str:
          "## Where, on the source",
          f"- Locator: {r.get('locator','')}",
          f"- Accessed: {r.get('accessed','')}",
-         f"- Source dated: {r.get('access_note','')}",
+         (f"- Source dated: {r.get('source_year')}, within the {config.YEAR_MIN}-{config.YEAR_MAX} window"
+          if r.get("source_year") else
+          f"- Source date: not confirmed within the {config.YEAR_MIN}-{config.YEAR_MAX} window"
+          + (f" (stated: {r.get('access_note','')})" if r.get("access_note") else "")),
          f"- Quotes verbatim: {'yes' if r.get('verbatim') else 'not confirmed'}", "",
          "## How it searched",
          *[f"- {q}" for q in (r.get('queries', []) or [])], "",
@@ -330,17 +351,144 @@ def dossier_md(r: dict) -> str:
     return "\n".join(L)
 
 
-def zip_run_bytes() -> bytes:
-    """Bundle the readable deliverables and captured source reports. No raw
-    json or markdown, the researcher gets documents and data, not internals."""
-    buf = io.BytesIO()
-    base = config.ROOT / "runs" / st.session_state.run_id
-    skip = {".json", ".jsonl", ".md"}
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in base.rglob("*"):
-            if p.is_file() and p.suffix.lower() not in skip:
-                z.write(p, p.relative_to(base))
-    return buf.getvalue()
+# posture -> (color, the decision it implies), the recommendation layer
+_POSTURE = {"enter": ("#12605A", "Enter or pilot"),
+            "watch": ("#C0862B", "Watch"),
+            "deepen": ("#8A938C", "Deepen, existing")}
+# the ordinal marks -> (numeric, color on a single-hue intensity ramp, text color)
+# weak is a clearly-present light sage, not near-white, so it never reads as missing data
+_MARKV = {"weak": (1, "#CAD7D1", "#4C5A55"), "partial": (2, "#7FB0A6", "#0C3E39"),
+          "strong": (3, "#12605A", "#FFFFFF")}
+
+
+def render_theme_charts(scorecard_path) -> None:
+    """Two coordinated, overlap-free views built to drive the decision: a ranked
+    'where to enter' bar (themes by weighted fit, colored by posture) and a
+    decision-matrix heatmap (themes x criteria, each cell colored by its mark).
+    Both scale to many themes and follow whatever criteria the spec defines."""
+    import plotly.graph_objects as go
+
+    crit = config.active_spec().get("criteria", [])
+    names = [c["name"] for c in crit]
+    if len(names) < 2:
+        return
+    df = pd.read_excel(scorecard_path, skiprows=2)
+    if df.empty or "Theme" not in df.columns:
+        return
+    weights = {c["name"]: (2 if c.get("weight", 1) >= 2 else 1) for c in crit}
+    post_rank = {"enter": 0, "watch": 1, "deepen": 2}
+
+    def mark_num(v):
+        return _MARKV.get(str(v).strip().lower(), (None, None, None))[0]
+
+    # per-theme composite: weighted marks as a 0-100 fit score
+    recs = []
+    for _, row in df.iterrows():
+        nums = {n: mark_num(row.get(n)) for n in names}
+        got = sum(weights[n] * (nums[n] or 0) for n in names)
+        cap = sum(weights[n] * 3 for n in names) or 1
+        post = str(row.get("Posture", "")).strip().lower()
+        recs.append({
+            "theme": str(row.get("Theme", "")), "tag": str(row.get("Standing", "")).strip(),
+            "posture": post, "score": round(got / cap * 100), "nums": nums,
+            "prank": post_rank.get(post, 3),
+        })
+    # sort so the recommended entries (enter) rise to the top, then by fit
+    recs.sort(key=lambda r: (r["prank"], -r["score"]))
+    order = [r["theme"] for r in recs]              # best-first (top of chart)
+    h = max(300, 34 * len(recs) + 90)
+
+    # posture group blocks, built by walking the actual sorted sequence bottom-to-top,
+    # so the grouping is visible AND any unexpected posture value still forms its own
+    # labeled band rather than vanishing from the chart
+    _plabel = {"enter": "Enter", "watch": "Watch", "deepen": "Deepen, existing"}
+    by_theme = {r["theme"]: r for r in recs}
+    seq = [by_theme[t]["posture"] for t in reversed(order)]   # bottom-to-top
+    blocks, i = [], 0
+    while i < len(seq):
+        p, j = seq[i], i
+        while j < len(seq) and seq[j] == p:
+            j += 1
+        blocks.append((p, _plabel.get(p, (p or "other").title()), i, j))
+        i = j
+    divider_ys = [e - 0.5 for _, _, _, e in blocks[:-1]]
+    # distinct postures top-to-bottom, so every theme's posture gets a bar
+    postures_top = list(dict.fromkeys(r["posture"] for r in recs))
+
+    def _add_dividers(fig):
+        for y in divider_ys:
+            fig.add_shape(type="line", xref="paper", x0=0, x1=1, yref="y", y0=y, y1=y,
+                          line=dict(color="#9AA39A", width=1.2, dash="dot"), layer="above")
+
+    st.markdown('<div class="hs-eyebrow" style="margin-top:10px">Where to enter, '
+                'themes ranked by weighted fit and colored by posture</div>', unsafe_allow_html=True)
+
+    # --- View 1: ranked posture bar (the "so what") ---
+    figbar = go.Figure()
+    for p in postures_top:
+        grp = [r for r in recs if r["posture"] == p]
+        if not grp:
+            continue
+        color, label = _POSTURE.get(p, ("#8A938C", (p or "Other").title()))
+        figbar.add_trace(go.Bar(
+            y=[r["theme"] for r in grp], x=[r["score"] for r in grp], orientation="h",
+            name=f"{label}", marker_color=color,
+            text=[r["tag"].title() for r in grp], textposition="outside", cliponaxis=False,
+            customdata=[[r["posture"].title(), r["tag"].title()] for r in grp],
+            hovertemplate="<b>%{y}</b><br>Weighted fit: %{x}<br>Posture: %{customdata[0]}"
+                          "<br>Standing: %{customdata[1]}<extra></extra>"))
+    figbar.update_layout(
+        barmode="stack", height=h, margin=dict(t=8, b=36, l=8, r=90),
+        xaxis=dict(title="Weighted fit score", range=[0, 112], showgrid=True, gridcolor="#E4E6E1"),
+        yaxis=dict(categoryorder="array", categoryarray=list(reversed(order)),
+                   autorange=True, automargin=True),
+        legend=dict(orientation="h", y=1.06, x=0, title=""),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(size=13), bargap=0.35)
+    _add_dividers(figbar)
+    st.plotly_chart(figbar, use_container_width=True)
+    st.caption("Grouped by posture, enter first, then watch, then deepen, and ranked by weighted "
+               "fit within each group, so bar length compares within a group, not across the dividers.")
+
+    # --- View 2: decision-matrix heatmap (the "why") ---
+    st.markdown('<div class="hs-eyebrow" style="margin-top:14px">The scorecard behind it, '
+                'each theme across your criteria</div>', unsafe_allow_html=True)
+    ys = list(reversed(order))                       # bottom-to-top so best sits on top
+    z, txt, tcol = [], [], []
+    by_theme = {r["theme"]: r for r in recs}
+    for th in ys:
+        r = by_theme[th]
+        z.append([r["nums"][n] for n in names])
+        txt.append([("" if r["nums"][n] is None else
+                     {1: "Weak", 2: "Partial", 3: "Strong"}[r["nums"][n]]) for n in names])
+    heat = go.Figure(go.Heatmap(
+        z=z, x=names, y=ys, zmin=1, zmax=3, xgap=3, ygap=3, showscale=False,
+        colorscale=[[0.0, _MARKV["weak"][1]], [0.5, _MARKV["partial"][1]], [1.0, _MARKV["strong"][1]]],
+        hovertemplate="<b>%{y}</b><br>%{x}: %{text}<extra></extra>", text=txt))
+    for i, th in enumerate(ys):
+        for j, n in enumerate(names):
+            v = by_theme[th]["nums"][n]
+            if v is None:
+                continue
+            heat.add_annotation(x=n, y=th, text={1: "Weak", 2: "Partial", 3: "Strong"}[v],
+                                showarrow=False, font=dict(size=12, color=_MARKV[
+                                    {1: "weak", 2: "partial", 3: "strong"}[v]][2]))
+    # carry the posture dimension into the heatmap: dividers plus a labeled band on the right
+    _add_dividers(heat)
+    for pk, plabel, s, e in blocks:
+        heat.add_annotation(xref="paper", x=1.012, yref="y", y=(s + e - 1) / 2,
+                            text=plabel, showarrow=False, textangle=90,
+                            xanchor="left", yanchor="middle",
+                            font=dict(size=12, color=_POSTURE.get(pk, ("#8A938C",))[0]))
+    heat.update_layout(
+        height=h + 20, margin=dict(t=12, b=10, l=8, r=104),
+        xaxis=dict(side="top", tickfont=dict(size=13, color="#12605A"), automargin=True,
+                   showgrid=False, ticks=""),
+        yaxis=dict(autorange=True, automargin=True, showgrid=False, ticks=""),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(size=13))
+    st.plotly_chart(heat, use_container_width=True)
+    st.caption("Read the bar for the call and the ranking, the matrix for the evidence "
+               "behind each theme. Weighted criteria count double in the fit score.")
 
 
 # --- per-user run folder, so two people never clobber each other ---
@@ -410,21 +558,111 @@ with st.sidebar:
 masthead()
 step = st.session_state.step
 
-# --- Step 1: upload ---
-eyebrow("Step one", "Your organization list")
-up = st.file_uploader("Drag in an Excel list. Columns: name, type, region (only name is required).",
-                      type=["xlsx"])
-c1, c2 = st.columns([1, 3])
-if c1.button("Use this list", type="primary"):
-    if up is None:
-        c2.error("Upload an organization list to begin.")
-    else:
-        config.ORG_SHEET.write_bytes(up.getbuffer())
-        st.session_state.n_orgs = len(io_xlsx.read_orgs())
-        st.session_state.step = 2
+# --- the editable framework (Scan Spec), read by every agent ---
+if "spec" not in st.session_state:
+    st.session_state.spec = json.loads(json.dumps(spec.DEFAULT_SPEC))
+config.SPEC = st.session_state.spec
+
+with st.expander("Frame the scan  ·  research question, criteria, context", expanded=(step == 1)):
+    sp = st.session_state.spec
+    sp["research_question"] = st.text_area("Research question", value=sp.get("research_question", ""), height=80)
+    st.caption("The criteria the Scorer and Themer use. Rename, redefine, add, or remove rows.")
+    cdf = pd.DataFrame(sp.get("criteria", []))
+    for col in ("name", "definition", "weight"):
+        if col not in cdf.columns:
+            cdf[col] = "" if col != "weight" else 1
+    edited_crit = st.data_editor(cdf[["name", "definition", "weight"]], num_rows="dynamic",
+                                 use_container_width=True, key="crit_editor")
+    sp["context"] = st.text_area("Context and existing programs to screen out",
+                                 value=sp.get("context", ""), height=140)
+    if st.button("Save frame"):
+        crit = []
+        for _, row in edited_crit.iterrows():
+            name = str(row.get("name", "") or "").strip()
+            if not name:
+                continue
+            key = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or f"c{len(crit)}"
+            try:
+                w = int(row.get("weight", 1))
+            except Exception:
+                w = 1
+            crit.append({"key": key, "name": name, "definition": str(row.get("definition", "") or ""), "weight": w})
+        if crit:
+            sp["criteria"] = crit
+        st.session_state.spec = sp
+        config.SPEC = sp
+        st.success(f"Frame saved. {len(sp['criteria'])} criteria in play.")
+
+# --- Step 1: build the organization roster (discover, add your own, or both) ---
+eyebrow("Step one", "Your organizations")
+st.caption("Discover organizations from your research question, add your own, or both. "
+           "They merge into one roster, de-duplicated, with each row marked by where it came from.")
+roster = st.session_state.setdefault("roster", [])
+
+col_a, col_b = st.columns(2)
+with col_a:
+    st.markdown("**Discover from the research question**")
+    if st.button("Discover organizations"):
+        with st.spinner("Proposing organizations from your research question..."):
+            disc = run_async(agents.discover(config.load_context(), 20))
+        disc = [{**o, "source": "discovered"} for o in disc]   # tag before merge
+        st.session_state.roster = io_xlsx.merge_orgs(st.session_state.roster, disc)
         st.rerun()
+with col_b:
+    st.markdown("**Add your own**")
+    pasted = st.text_area("One organization per line", key="paste_orgs", height=110,
+                          placeholder="Tony Blair Institute for Global Change\nODI\nAfDB")
+    frame_it = st.checkbox("Frame my additions (fill type, region, and fit)", value=True,
+                           help="A quick pass that describes each added organization so it "
+                                "sits alongside the discovered ones in the same shape.")
+    up = st.file_uploader("or upload an Excel list (name, type, region)", type=["xlsx"], key="up_orgs")
+    if st.button("Add to roster"):
+        additions: list[dict] = [{"name": ln.strip()} for ln in pasted.splitlines() if ln.strip()]
+        if frame_it and additions:
+            with st.spinner("Framing your additions..."):
+                framed = run_async(agents.frame_orgs(config.load_context(), [a["name"] for a in additions]))
+            if framed:
+                additions = framed
+        if up is not None:
+            tmp = config.WORK_DIR / "_uploaded_orgs.xlsx"
+            tmp.write_bytes(up.getbuffer())
+            try:
+                additions += io_xlsx.read_orgs(tmp)
+            except Exception as e:
+                st.error(f"Could not read that file: {e}")
+        st.session_state.roster = io_xlsx.merge_orgs(st.session_state.roster, additions)
+        st.rerun()
+
+if roster:
+    counts = {}
+    for o in roster:
+        counts[o.get("source", "")] = counts.get(o.get("source", ""), 0) + 1
+    tally = ", ".join(f"{n} {s}" for s, n in counts.items() if s)
+    st.caption(f"{len(roster)} organizations in the roster ({tally}). Edit, remove, or add rows, then use it.")
+    rdf = pd.DataFrame(roster)
+    for col in ("name", "type", "region", "why", "source"):
+        if col not in rdf.columns:
+            rdf[col] = ""
+    edited_orgs = st.data_editor(rdf[["name", "type", "region", "why", "source"]], num_rows="dynamic",
+                                 use_container_width=True, hide_index=True, key="roster_editor")
+    cc1, cc2 = st.columns([1, 3])
+    if cc1.button("Use this roster", type="primary"):
+        rows = [{"name": str(r.get("name", "") or "").strip(), "type": str(r.get("type", "") or ""),
+                 "region": str(r.get("region", "") or ""), "why": str(r.get("why", "") or ""),
+                 "source": str(r.get("source", "") or "").strip() or "analyst"}
+                for _, r in edited_orgs.iterrows() if str(r.get("name", "") or "").strip()]
+        rows = io_xlsx.merge_orgs(rows, [])          # final de-dup and contiguous ids
+        if not rows:
+            cc2.error("Add at least one organization to begin.")
+        else:
+            io_xlsx.write_orgs_list(rows)
+            st.session_state.roster = rows
+            st.session_state.n_orgs = len(rows)
+            st.session_state.step = 2
+            st.rerun()
+
 if step >= 2:
-    c2.success(f"{st.session_state.n_orgs} organizations loaded.")
+    st.success(f"{st.session_state.n_orgs} organizations loaded.")
 
 # --- Step 2: run ---
 if step >= 2:
@@ -489,6 +727,15 @@ if step >= 3:
                 ("Verified", st.session_state.n_verified),
                 ("Flagged", flagged_total), ("Set aside", dropped)]),
                 unsafe_allow_html=True)
+    # coverage honesty: how much of the scan rests on reports read vs unreachable sources
+    orgs_with_reports = sum(1 for p in payloads if p.get("reports_found"))
+    unreachable = sum(1 for p in payloads for r in p.get("rows", []) if r.get("source_reachable") is False)
+    cov = f"Coverage · {orgs_with_reports} of {len(payloads)} organizations had reports found and read"
+    if unreachable:
+        cov += f" · {unreachable} approach{'es' if unreachable != 1 else ''} rest on a source that could not be read directly"
+    st.caption(cov + ".")
+    if client.USAGE["calls"]:
+        st.caption("Spend · " + client.usage_line() + ".")
     srcdir = config.ROOT / "runs" / st.session_state.run_id / "sources"
     manifest = st.session_state.get("sources")
     if manifest is None:
@@ -516,6 +763,8 @@ if step >= 3:
         verified = sum(1 for r in rows if (r.get("verification", {}) or {}).get("status") == "verified")
         flagged = sum(1 for r in rows if r.get("flagged"))
         head = f"{p.get('org','')}      ·   {len(rows)} kept, {verified} verified"
+        if p.get("reports_found"):
+            head += f", {p['reports_found']} reports found"
         if flagged:
             head += f", {flagged} flagged"
         with st.expander(head):
@@ -543,10 +792,6 @@ if step >= 3:
             if drp:
                 st.caption("Set aside at reading: " + ", ".join(d.get("name", "") for d in drp))
 
-    st.download_button("⬇  Download the full run, everything it took",
-                       zip_run_bytes(), file_name=f"horizon-scan-{st.session_state.run_id}.zip",
-                       type="primary")
-
 # --- Step 3: review gate ---
 if step >= 3:
     eyebrow("Step three", "Where you decide")
@@ -554,7 +799,8 @@ if step >= 3:
     df = pd.read_excel(config.REVIEW_DIR / "longlist.xlsx")
     df["keep"] = df["keep"].astype(str).str.upper().eq("Y")
     edited = st.data_editor(df, use_container_width=True, hide_index=True,
-                            column_config={"keep": st.column_config.CheckboxColumn("keep")})
+                            column_config={"keep": st.column_config.CheckboxColumn("keep"),
+                                           "rid": st.column_config.TextColumn("rid", disabled=True)})
     hunch_path = config.REVIEW_DIR / "hunches.md"
     hunches = st.text_area("Your hunches",
                            value=hunch_path.read_text(encoding="utf-8") if hunch_path.exists() else "",
@@ -580,6 +826,10 @@ if step >= 4:
     if out_ready or st.session_state.get("generated"):
         if sc.exists():
             st.dataframe(pd.read_excel(sc, skiprows=2), use_container_width=True, hide_index=True)
+            try:
+                render_theme_charts(sc)
+            except Exception as e:
+                st.caption(f"(charts unavailable: {str(e)[:80]})")
         docs = [("Theme scorecard", "the decision layer", config.OUT_DIR / "theme_scorecard.xlsx"),
                 ("Innovation map", "the evidence, by theme", config.OUT_DIR / "innovation_map.xlsx"),
                 ("Synthesis memo", "Word document, house style", config.OUT_DIR / "synthesis_memo.docx")]
