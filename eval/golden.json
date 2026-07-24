@@ -21,6 +21,27 @@
       "region": "Africa",
       "expect_domains": ["policycenter.ma"],
       "expect_keywords": ["atlantic", "africa", "economic", "report", "trade", "development"]
+    },
+    {
+      "name": "African Development Bank (AfDB)",
+      "type": "Development finance institution",
+      "region": "Africa",
+      "expect_domains": ["afdb.org"],
+      "expect_keywords": ["industrialization", "value", "chain", "energy", "jobs", "infrastructure"]
+    },
+    {
+      "name": "United Nations Economic Commission for Africa (UNECA)",
+      "type": "Multilateral",
+      "region": "Africa",
+      "expect_domains": ["uneca.org"],
+      "expect_keywords": ["industrialization", "trade", "afcfta", "special economic zones", "digital", "transformation"]
+    },
+    {
+      "name": "International Growth Centre (IGC)",
+      "type": "Research center",
+      "region": "Global",
+      "expect_domains": ["theigc.org"],
+      "expect_keywords": ["cities", "state", "firms", "growth", "energy", "evidence"]
     }
   ]
 }
