@@ -26,6 +26,25 @@ from . import config, mock
 _client: AsyncAnthropic | None = None
 _or_client: Any = None
 
+# running token account for the process, so a run's spend is visible instead of blind
+USAGE = {"input": 0, "output": 0, "cache_read": 0, "calls": 0}
+
+
+def _account(resp: Any) -> None:
+    u = getattr(resp, "usage", None)
+    if not u:
+        return
+    USAGE["calls"] += 1
+    # Anthropic fields; OpenRouter (OpenAI shape) uses prompt_/completion_tokens
+    USAGE["input"] += getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", 0) or 0
+    USAGE["output"] += getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", 0) or 0
+    USAGE["cache_read"] += getattr(u, "cache_read_input_tokens", 0) or 0
+
+
+def usage_line() -> str:
+    return (f"{USAGE['calls']} model calls, {USAGE['input']:,} input tokens "
+            f"({USAGE['cache_read']:,} from cache), {USAGE['output']:,} output tokens")
+
 
 def client() -> AsyncAnthropic:
     global _client
@@ -83,6 +102,7 @@ async def _openrouter_call(
         tool_choice={"type": "function", "function": {"name": "record"}},
         extra_body=body or None,
     )
+    _account(resp)
     if not getattr(resp, "choices", None):
         raise RuntimeError(f"openrouter {config.OR_MODEL}: empty response (no choices)")
     msg = resp.choices[0].message
@@ -162,9 +182,16 @@ async def structured_call(
             tools=[rec],
             tool_choice={"type": "tool", "name": "record"},
         )
+        _account(resp)
         out = _find_record(resp.content)
         if out is None:
+            if resp.stop_reason == "max_tokens":
+                raise RuntimeError(
+                    f"{model}: hit the {max_tokens}-token limit before finishing (truncated), "
+                    "raise max_tokens")
             raise RuntimeError(f"{model}: model did not call record ({resp.stop_reason})")
+        if resp.stop_reason == "max_tokens":
+            out["_truncated"] = True     # the caller can retry with more headroom
         return out
 
     # Browsing: web_search (server tool) + record, auto choice, loop on pauses.
@@ -178,6 +205,7 @@ async def structured_call(
             tools=tools,
             tool_choice={"type": "auto"},
         )
+        _account(resp)
         out = _find_record(resp.content)
         if out is not None:
             return out
@@ -198,6 +226,7 @@ async def structured_call(
             tools=[rec],
             tool_choice={"type": "tool", "name": "record"},
         )
+        _account(forced)
         out = _find_record(forced.content)
         if out is None:
             raise RuntimeError(f"{model}: could not force a record call")

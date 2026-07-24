@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 Mark = Literal["strong", "partial", "weak"]
 Overall = Literal["high", "medium", "low"]
-Posture = Literal["aligned", "impact", "watch"]
+Posture = Literal["enter", "watch", "deepen"]
 Tag = Literal["existing", "adjacent", "new"]
 VStatus = Literal["verified", "partial"]
 Consistency = Literal["consistent", "overstated", "understated"]
@@ -107,7 +107,7 @@ SCOUT_SCHEMA = {
                 "properties": {
                     "name": {"type": "string"},
                     "one_liner": {"type": "string", "description": "One sentence on what it does."},
-                    "year": {"type": "string", "description": "Year it appeared, since 2023."},
+                    "year": {"type": "string", "description": "Year it appeared, within the recency window."},
                     "url": {"type": "string", "description": "Direct link to the org's own page."},
                     "source_type": {"type": "string",
                                     "enum": ["report", "webpage", "dataset", "press", "other"]},
@@ -213,7 +213,7 @@ THEMES_SCHEMA = {
                     "tag": {"type": "string", "enum": ["existing", "adjacent", "new"]},
                     "mandate_fit": _mark(""), "research_to_policy": _mark(""),
                     "african_traction": _mark(""), "white_space": _mark(""),
-                    "posture": {"type": "string", "enum": ["aligned", "impact", "watch"]},
+                    "posture": {"type": "string", "enum": ["enter", "watch", "deepen"]},
                     "rationale": {"type": "string"},
                     "marquee": {"type": "string", "description": "One leading approach."},
                     "members": {"type": "array", "items": {"type": "string"}},
@@ -231,6 +231,20 @@ SYNTH_SCHEMA = {
         "memo_markdown": {"type": "string", "description": "The full short memo, markdown, house style."},
         "scorecard_intro": {"type": "string", "description": "One paragraph atop the scorecard."},
     },
+}
+
+LIBRARIAN_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["reports"],
+    "properties": {"reports": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False,
+        "required": ["title", "date", "url", "type"],
+        "properties": {
+            "title": {"type": "string"},
+            "date": {"type": "string", "description": "Publication date or year."},
+            "url": {"type": "string", "description": "Direct link, a PDF where one exists."},
+            "type": {"type": "string",
+                     "enum": ["report", "brief", "working paper", "annual report", "dataset", "other"]},
+        }}}},
 }
 
 HUNCH_SCHEMA = {
