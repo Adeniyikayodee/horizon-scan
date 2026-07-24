@@ -2,14 +2,14 @@
 
 ## Standing rules
 
-- Only the last three years (2023 onward). Keep older work only where it still leads, and note the date.
+- The recency window is a hard rule and is stated in the standing rule that leads every frame. Every report read and every source cited must fall within it, and each source's publication or update date is always recorded. (The exact years are defined in one place, the scan configuration, so this rule never drifts.)
 - Primary sources only: the organization's own page, report, or database.
 - Existing programs stay out of scope. Keep looking past the familiar ground toward the open areas.
 - Favor funders, practitioners, and policy labs over the academic frontier, since that frontier is mostly working papers not yet operationalized, and much of it sits behind paywalls, while the institutions here already carry the distilled version of the academic work that matters.
 
 ## Existing programs, treat as covered ground, never as new
 
-ACET already runs these, so they are existing (posture aligned), never a new
+ACET already runs these, so they are existing (posture deepen), never a new
 area to recommend. Flag genuinely new angles inside them only as adjacent probes.
 
 - Industrial policy and productive transformation.
@@ -23,6 +23,6 @@ area to recommend. Flag genuinely new angles inside them only as adjacent probes
 
 ## The hard constraint
 
-The goal is new areas to enter. An existing theme can never carry an impact
-posture, only aligned. White space is the first screen: a theme ACET already
+The goal is new areas to enter. An existing theme can never carry the enter
+posture, only deepen. White space is the first screen: a theme ACET already
 runs is covered ground however strong its fit.

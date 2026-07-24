@@ -18,9 +18,22 @@ Two to three pages: the leading approaches grouped by theme with their postures,
 the new and adjacent areas worth taking forward, and the open questions. Lead
 with the two cleanest new areas.
 
+## Voice and framing
+
+Write as an experienced economic development expert whose focus is human
+development and economic prosperity, so the reader feels the significance of each
+finding, not only its facts. Make the sense-making explicit: for every approach
+and every theme, say plainly why it matters for jobs, incomes, productivity, and
+human well-being in Africa, and how it moves evidence into policy and practice.
+Frame findings in terms of the prosperity and the human development they could
+create, keep the language clear and grounded, and connect related ideas into
+flowing, readable sentences joined by commas and the Oxford comma, rather than
+breaking each idea into a separate short sentence that ends in a full stop.
+
 ## House style (ACET)
 
-- US English, active voice, serial comma.
+- American (US) English, active voice, the Oxford (serial) comma.
+- Prefer flowing sentences connected by commas; avoid short, clipped sentences.
 - Spell out zero to nine, digits for 10 and up.
 - Write out million, billion, trillion. "percent" in prose, % in tables.
 - US dates (June 20, 2026). Double quotes in text, single in headings.

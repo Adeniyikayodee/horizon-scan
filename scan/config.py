@@ -53,6 +53,29 @@ GROUND_QUOTES = os.environ.get("GROUND_QUOTES", "1").lower() in ("1", "true", "y
 # Scan scope: "africa" (default) or "global" (any region/actor, transfer-to-Africa noted).
 SCAN_MODE = os.environ.get("SCAN_MODE", "africa")
 
+# --- The recency window, ONE source of truth ---
+# The enforcement in pipeline.py and the rule text in every agent frame both read
+# these, so the window never drifts between what is said and what is enforced.
+# Change it here (or via env) and it changes everywhere at once.
+YEAR_MIN = int(os.environ.get("SCAN_YEAR_MIN", "2023"))
+YEAR_MAX = int(os.environ.get("SCAN_YEAR_MAX", "2026"))
+
+
+def window_years() -> list[int]:
+    return list(range(YEAR_MIN, YEAR_MAX + 1))
+
+
+def window_rule() -> str:
+    """The canonical recency rule, injected verbatim into every agent's frame so
+    all stages carry the identical hard rule. The years come only from here."""
+    ys = ", ".join(str(y) for y in window_years())
+    return (f"# Standing hard rule, applies to every stage\n\n"
+            f"The recency window is {YEAR_MIN} to {YEAR_MAX} ({ys}), and it is a hard rule, not a "
+            f"preference. Every report read and every source cited must be published or updated within "
+            f"it, nothing before {YEAR_MIN}. Sweep the whole span, do not stop at {YEAR_MIN}, and actively "
+            f"include the most recent {YEAR_MAX} and {YEAR_MAX - 1} work. Always record each source's "
+            f"publication or update date, a source that cannot be dated to this window is set aside.")
+
 # --- Paths ---
 ROOT = Path(__file__).resolve().parent.parent
 CONTEXT_DIR = ROOT / "context"
@@ -71,17 +94,37 @@ for d in (WORK_DIR, ORGS_WORK, REVIEW_DIR, OUT_DIR):
 CONTEXT_FILES = ["mission", "scope", "scoring", "themes", "output_spec", "policy"]
 
 
+# The active Scan Spec (research question, lenses, criteria, context). The app
+# sets this per session; None means use the default.
+SPEC = None
+
+
+def active_spec() -> dict:
+    global SPEC
+    if SPEC is None:
+        from . import spec as _sm
+        SPEC = dict(_sm.DEFAULT_SPEC)
+    return SPEC
+
+
 def load_context() -> dict[str, str]:
-    """Read every context/*.md into a dict keyed by stem. In global scope, the
-    mission is swapped for mission_global.md."""
-    ctx: dict[str, str] = {}
-    for name in CONTEXT_FILES:
-        p = CONTEXT_DIR / f"{name}.md"
-        ctx[name] = p.read_text(encoding="utf-8") if p.exists() else ""
+    """Build the agent frame. Mission, scope, and scoring come from the active
+    Scan Spec (so criteria are editable); themes, output_spec, and policy stay
+    as files. Global scope swaps in mission_global.md."""
+    from . import spec as _sm
+    sp = active_spec()
+    ctx: dict[str, str] = {
+        "mission": _sm.mission_text(sp),
+        "scope": _sm.scope_text(sp),
+        "scoring": _sm.scoring_text(sp),
+    }
     if SCAN_MODE == "global":
         gp = CONTEXT_DIR / "mission_global.md"
         if gp.exists():
             ctx["mission"] = gp.read_text(encoding="utf-8")
+    for name in ("themes", "output_spec", "policy"):
+        p = CONTEXT_DIR / f"{name}.md"
+        ctx[name] = p.read_text(encoding="utf-8") if p.exists() else ""
     return ctx
 
 

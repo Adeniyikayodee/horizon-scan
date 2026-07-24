@@ -20,8 +20,8 @@ fit and research to policy.
 
 Each theme carries one posture:
 
-- aligned: strongly matches ACET's current focus. Every existing theme is aligned.
-- impact: a new or adjacent area where ACET engaging would do real work peers have left open.
-- watch: monitor and revisit.
+- enter: a new or adjacent area worth entering or piloting now, where ACET would define an agenda its peers have not taken up.
+- watch: monitor and revisit at the next scan.
+- deepen: existing work that strongly matches ACET's current focus, to keep current. Every existing theme is deepen.
 
-Self-check: no existing theme may carry impact.
+Self-check: no existing theme may carry enter.
