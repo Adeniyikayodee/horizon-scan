@@ -9,10 +9,46 @@ import concurrent.futures
 import hashlib
 import json
 import mimetypes
+import ipaddress
 import re
+import socket
 import ssl
+import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
+
+_BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal"}
+
+
+def _is_internal(url: str) -> bool:
+    """True if a URL points at a private, loopback, link-local, or metadata host,
+    so a hallucinated or injection-planted URL can never make us fetch internal
+    services (e.g. the 169.254.169.254 cloud-metadata endpoint). Hostnames are
+    resolved and every resolved address is checked, to catch a public name that
+    maps to an internal IP."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return True
+    if not host or host in _BLOCKED_HOSTS or host.endswith((".localhost", ".internal")):
+        return True
+
+    def _bad(ip_str: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        return (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+    if _bad(host):                       # host is an IP literal
+        return True
+    try:                                 # host is a name: resolve and check every A/AAAA
+        infos = socket.getaddrinfo(host, None)
+        return any(_bad(info[4][0]) for info in infos)
+    except Exception:
+        return True                      # cannot resolve, do not fetch
 
 try:  # use certifi's trust store so HTTPS works on macOS local runs too
     import certifi
@@ -51,6 +87,8 @@ def _fetch_one(url: str, dest: Path) -> dict:
         return {"url": url, "status": "skipped", "reason": "no valid url"}
     if "example.org" in url:
         return {"url": url, "status": "skipped", "reason": "placeholder (test mode)"}
+    if _is_internal(url):
+        return {"url": url, "status": "skipped", "reason": "internal or private host"}
     try:
         req = urllib.request.Request(url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=TIMEOUT, context=_SSL) as resp:
@@ -92,7 +130,8 @@ def _norm(s: str) -> str:
 
 def _read_source(url: str):
     """Fetch a URL, return (bytes, content_type) or (None, None)."""
-    if not url or not url.lower().startswith(("http://", "https://")) or "example.org" in url:
+    if (not url or not url.lower().startswith(("http://", "https://"))
+            or "example.org" in url or _is_internal(url)):
         return None, None
     try:
         req = urllib.request.Request(url, headers=HEADERS)
@@ -124,10 +163,10 @@ def _pdf_to_text(data: bytes) -> str:
         return ""
 
 
-def fetch_text(url: str, max_chars: int = 60000) -> str:
-    """The full readable text of the source, HTML stripped or PDF extracted, or
-    '' if it could not be read. This is what lets the Reader actually read the
-    report or paper rather than skim search snippets."""
+_TEXT_CACHE: dict[str, str] = {}
+
+
+def _extract_full(url: str) -> str:
     data, ctype = _read_source(url)
     if data is None:
         return ""
@@ -138,7 +177,95 @@ def fetch_text(url: str, max_chars: int = 60000) -> str:
         text = _html_to_text(data.decode("utf-8", "ignore"))
     else:
         return ""
-    return re.sub(r"\n{3,}", "\n\n", text).strip()[:max_chars]
+    return re.sub(r"\n{3,}", "\n\n", text).strip()[:400000]
+
+
+_LINK_CACHE: dict[str, str] = {}
+# phrases a soft-404 page shows with a 200 status, checked near the top of the body
+_NOTFOUND_MARKERS = (
+    "page not found", "404 error", "error 404", "page you requested",
+    "page you were looking for", "page you are looking for", "no longer available",
+    "content not found", "couldn't find", "could not be found", "does not exist",
+    "we can't find", "we cannot find", "sorry, this page")
+_HOME_PATHS = {"", "home", "en", "index", "index.html", "index.php", "en/home"}
+
+
+def link_status(url: str) -> str:
+    """One opened-and-inspected verdict for a URL, so nothing blank or missing is
+    ever shown. Returns:
+      - "ok"      : resolves and carries real content
+      - "dead"    : a hard 404/410, OR a soft-404 (200 status but a not-found body
+                    or a silent redirect to the site home), the case a status code
+                    alone misses
+      - "empty"   : resolves but has almost no readable content (blank or JS shell)
+      - "blocked" : 401/403/429, exists but bot-protected, do not drop
+      - "unknown" : a network error, uncheckable, do not drop
+    Cached per URL within a run."""
+    if not url or not url.lower().startswith(("http://", "https://")) or "example.org" in url:
+        return "ok"
+    if _is_internal(url):
+        return "dead"                    # never surface an internal or private URL
+    if url in _LINK_CACHE:
+        return _LINK_CACHE[url]
+
+    def _finish(v: str) -> str:
+        if len(_LINK_CACHE) >= 256:
+            _LINK_CACHE.clear()
+        _LINK_CACHE[url] = v
+        return v
+
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)  # GET, follows redirects
+        with urllib.request.urlopen(req, timeout=14, context=_SSL) as resp:
+            final = resp.geturl()                            # where redirects landed
+            ctype = (resp.headers.get_content_type() or "").lower()
+            raw = resp.read(65536)                           # first 64 KB is enough
+    except urllib.error.HTTPError as e:
+        return _finish("dead" if e.code in (404, 410) else
+                       "blocked" if e.code in (401, 403, 429) else "unknown")
+    except Exception:
+        return _finish("unknown")
+
+    is_pdf = ctype == "application/pdf" or url.lower().split("?")[0].endswith(".pdf")
+    if is_pdf:
+        return _finish("ok" if raw[:5] == b"%PDF-" or len(raw) > 2000 else "empty")
+
+    from urllib.parse import urlparse
+    text = _html_to_text(raw.decode("utf-8", "ignore"))
+    low = text.lower()
+    landed_home = urlparse(final).path.strip("/").lower() in _HOME_PATHS
+    req_was_deep = len(urlparse(url).path.strip("/")) > 1
+    hit = any(m in low for m in _NOTFOUND_MARKERS)
+    # soft-404: a not-found phrase with little content, or a deep link bounced home
+    if hit and (landed_home or len(text) < 1800):
+        return _finish("dead")
+    if landed_home and req_was_deep and len(text) < 1200:
+        return _finish("dead")
+    if len(text.strip()) < 200:
+        return _finish("empty")
+    return _finish("ok")
+
+
+def link_dead(url: str) -> bool:
+    """True when a URL is a hard or soft 404, so a stale, hallucinated, or
+    redirected-away link is dropped before it is ever shown. Blocked, empty, and
+    uncheckable links return False: we do not drop what we cannot disprove."""
+    return link_status(url) == "dead"
+
+
+def fetch_text(url: str, max_chars: int = 60000) -> str:
+    """The full readable text of the source, HTML stripped or PDF extracted, or
+    '' if it could not be read. Cached per URL so the Reader's read and the
+    Verifier's grounding fetch the same report once, not twice."""
+    if not url:
+        return ""
+    full = _TEXT_CACHE.get(url)
+    if full is None:
+        full = _extract_full(url)
+        if len(_TEXT_CACHE) >= 64:
+            _TEXT_CACHE.clear()
+        _TEXT_CACHE[url] = full
+    return full[:max_chars]
 
 
 def quote_grounded(url: str, quote: str):
