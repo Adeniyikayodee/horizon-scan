@@ -56,6 +56,9 @@ python -m scan run --stage 1     # scan, score, verify  -> review/
 python -m scan run --stage 2     # themes and memo       -> out/
 python -m scan status            # per-organization progress and errors
 python -m scan eval              # retrieval quality on the golden set
+
+python -m scan run --stage 1 --dry-run        # test mode, no key and no cost
+python -m scan run --stage 1 --scope global   # any region, not only Africa
 ```
 
 Stage one is resumable. Each organization is cached in `work/orgs/<id>.jsonl`, so
@@ -102,8 +105,12 @@ framed automatically so they sit alongside the discovered ones.
   by default. Change it in one place with `SCAN_YEAR_MIN` and `SCAN_YEAR_MAX`, and
   both the enforcement and the agent instructions follow.
 - Provider. Anthropic is the default, with native web search and prompt caching.
-  Set `SCAN_PROVIDER=openrouter` and `OR_MODEL` to run the same agents on another
-  model and compare the results.
+  Set `SCAN_PROVIDER=openrouter` and `OR_MODEL`, or pass `--provider openrouter
+  --model <id>`, to run the same agents on another model and compare the results.
+- Scope. The scan targets Africa by default. Pass `--scope global`, or set
+  `SCAN_MODE=global`, to scan any region and note the transfer to Africa.
+- Test mode. `--dry-run` (or `SCAN_DRY_RUN=1`) runs the whole pipeline on canned
+  data with no key and no network, so the flow can be checked at zero cost.
 
 ## The organization sheet
 
