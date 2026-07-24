@@ -61,12 +61,12 @@ def test_full_dry_run() -> None:
     # author stamped on the workbooks
     assert load_workbook(scorecard).properties.creator == "Kayode Adeniyi"
 
-    # hard constraint: no existing theme carries a non-aligned posture
+    # hard constraint: an existing theme is always deepen, never enter
     rows = list(load_workbook(scorecard).active.iter_rows(values_only=True))
     for r in rows[3:]:  # skip intro, blank, header
         standing, posture = r[1], r[6]
         if standing == "existing":
-            assert posture == "aligned", f"existing theme not aligned: {r[0]}"
+            assert posture == "deepen", f"existing theme not deepen: {r[0]}"
 
 
 if __name__ == "__main__":
