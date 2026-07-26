@@ -91,6 +91,13 @@ def _frame_orgs(user: str) -> dict[str, Any]:
          "why": "Added by the analyst, framed for the roster."} for n in names]}
 
 
+def _corroborate() -> dict[str, Any]:
+    print("  corrob   checking a second, independent source")
+    return {"corroborated": True, "source": "An independent institution",
+            "url": "https://example.org/second-source", "quote": "A second source confirms the gain.",
+            "note": "Confirmed on an independent source."}
+
+
 def _discover() -> dict[str, Any]:
     print("  discover organizations")
     return {"organizations": [
@@ -148,6 +155,8 @@ def mock_response(schema: dict[str, Any], user: str) -> dict[str, Any]:
         return _librarian(subj)
     if "keep" in keys:
         return _read(subj, h)
+    if "corroborated" in keys:
+        return _corroborate()
     if "organizations" in keys:
         return _frame_orgs(user) if "to frame" in user.lower() else _discover()
     if "quote_supports_claim" in keys:

@@ -314,7 +314,10 @@ findings, and keep every tool and AI trace out entirely.
 Each theme carries an evidence summary with verified and partial counts. State the
 strength of the evidence plainly and in the affirmative: where a theme rests on
 secondary sources, say that it rests on secondary sources and awaits a primary
-source to confirm it. Also write one scorecard intro paragraph. Call record once.
+source to confirm it. Entry themes also carry a corroboration field, where a theme
+is confirmed on an independent second source, say so and name it, and where it
+rests on a single source, note that plainly so the reader knows how firm it is.
+Also write one scorecard intro paragraph. Call record once.
 """
 
 DISCOVER_I = """
@@ -461,6 +464,44 @@ async def audit(ctx: dict[str, str], row: dict[str, Any]) -> dict[str, Any]:
     dumped = schemas.Audit(**_coerce_audit(out)).model_dump()
     dumped["_coerced"] = _defaulted(out, {"score_matches_evidence": _CONSIST, "verdict": {"pass", "flag"}})
     return dumped
+
+
+CORROBORATE_I = """
+You are corroborating a finding on a SECOND, independent source. Given a claim and
+the organization it came from, search the web for a DIFFERENT organization or
+document that confirms the same fact, not the original source. Set corroborated
+true only when an independent source genuinely confirms the claim, name that
+source, quote the confirming line, and give a working link copied exactly from your
+search results, never one you construct or guess. If you find no independent
+source, set corroborated false and say so plainly. Search the web, then call
+record once.
+"""
+
+CORROBORATE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["corroborated", "source", "url", "quote", "note"],
+    "properties": {
+        "corroborated": {"type": "boolean",
+                         "description": "True only if an INDEPENDENT second source confirms the claim."},
+        "source": {"type": "string", "description": "The independent source's name, or empty."},
+        "url": {"type": "string",
+                "description": "A working link to the independent source, copied from results, or empty."},
+        "quote": {"type": "string", "description": "The confirming line from the independent source, or empty."},
+        "note": {"type": "string"},
+    },
+}
+
+
+async def corroborate(ctx: dict[str, str], claim: str) -> dict[str, Any]:
+    """Look for an independent second source that confirms a claim, so a key finding
+    does not rest on a single source."""
+    out = await structured_call(
+        model=config.MODEL_SONNET, frame=_frame(ctx, ["mission"], CORROBORATE_I),
+        user=f"Claim to corroborate on a second, independent source:\n{claim}",
+        schema=CORROBORATE_SCHEMA, web=True, effort="medium",
+    )
+    return {"corroborated": bool(out.get("corroborated")), "source": _s(out.get("source")),
+            "url": _s(out.get("url")), "quote": _s(out.get("quote")), "note": _s(out.get("note"))}
 
 
 async def seed_hunches(ctx: dict[str, str], titles: list[str]) -> list[dict[str, str]]:

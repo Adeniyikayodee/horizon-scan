@@ -59,6 +59,12 @@ def settle_row(row: dict[str, Any]) -> dict[str, Any]:
         if v.get("status") == "verified":
             v["status"] = "partial"
             v["note"] = (v.get("note", "") + " (held to partial: quote not in source)").strip()
+    # content relevance: the reading's own quotes were checked against the source
+    if row.get("reading_grounded") is False:
+        reasons.append("the reading's quotes were not found in the source")
+        if v.get("status") == "verified":
+            v["status"] = "partial"
+            v["note"] = (v.get("note", "") + " (held to partial: reading not grounded in source)").strip()
     row["verification"] = v
 
     if a.get("verdict") == "flag":

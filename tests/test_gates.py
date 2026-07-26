@@ -73,6 +73,26 @@ def test_bad_proxy_content_rejects_error_pages():
     assert not S._bad_proxy_content("Blue Economy Report. " + "Real coastal value analysis. " * 50)
 
 
+def test_settle_holds_ungrounded_reading_to_partial():
+    # a reading whose own quotes were not found in the source is not verified
+    row = {"verification": {"status": "verified", "claim_supported": True, "confirming_quote": "x"},
+           "audit": {"verdict": "pass", "quote_supports_claim": True, "source_is_primary": True,
+                     "score_matches_evidence": "consistent"},
+           "quote_grounded": True, "reading_grounded": False}
+    G.settle_row(row)
+    assert row["verification"]["status"] == "partial"
+    assert row["flagged"] and any("not found in the source" in r for r in row["flags"])
+
+
+def test_settle_keeps_grounded_reading_verified():
+    row = {"verification": {"status": "verified", "claim_supported": True, "confirming_quote": "x"},
+           "audit": {"verdict": "pass", "quote_supports_claim": True, "source_is_primary": True,
+                     "score_matches_evidence": "consistent"},
+           "quote_grounded": True, "reading_grounded": True}
+    G.settle_row(row)
+    assert row["verification"]["status"] == "verified" and not row["flagged"]
+
+
 def test_proxy_verdict(monkeypatch):
     monkeypatch.setattr(S, "_fetch_via_proxy", lambda url: "")               # proxy can't read
     assert S._proxy_verdict("https://x.org/a") == ""

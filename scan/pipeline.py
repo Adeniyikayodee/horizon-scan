@@ -193,8 +193,16 @@ async def _process_org(ctx, org, sem, progress: Progress = None) -> dict[str, An
                 continue
             # HARD RULE: the source the Reader actually read must fall in the recency window
             yr = _first_year(r.get("access_note", ""), src.get("report_date", ""), src.get("year", ""))
+            # reflection gate: drop a thin or empty reading before it costs a scoring
+            # call, a substantive reading has a described approach and either a quote
+            # or stated evidence
+            thin = not (str(r.get("what", "")).strip()
+                        and (r.get("quotes") or str(r.get("evidence", "")).strip()))
             if not r.get("keep"):
                 dropped.append({"org": org["name"], "name": cand["name"]})
+            elif thin:
+                dropped.append({"org": org["name"], "name": cand["name"],
+                                "reason": "reading too thin, no substantive content"})
             elif _out_of_window(yr):
                 dropped.append({"org": org["name"], "name": cand["name"],
                                 "reason": f"source dated {yr}, outside {config.YEAR_MIN}-{config.YEAR_MAX}"})
@@ -290,6 +298,20 @@ async def _process_org(ctx, org, sem, progress: Progress = None) -> dict[str, An
                     sources.quote_grounded, row.get("url", ""), q)
             else:
                 row["quote_grounded"] = None
+            # content relevance: are the Reader's OWN quotes in the source, not just
+            # the Verifier's confirming quote? Catches a reading pulled from a real but
+            # unrelated page, the deepest remaining hallucination path
+            rq = [x for x in (row.get("quotes") or []) if x][:3]
+            if config.GROUND_QUOTES and not config.DRY_RUN and rq and row.get("url"):
+                checks = [await asyncio.to_thread(sources.quote_grounded, row["url"], x) for x in rq]
+                if any(c is True for c in checks):
+                    row["reading_grounded"] = True
+                elif any(c is False for c in checks):     # checkable quotes, none in the source
+                    row["reading_grounded"] = False
+                else:
+                    row["reading_grounded"] = None
+            else:
+                row["reading_grounded"] = None
             # fix 3: surface every field a model returned off-spec that we had to repair
             row["coerced_fields"] = (
                 ["score." + f for f in (row.get("score") or {}).get("_coerced", [])]
@@ -441,14 +463,17 @@ async def run_stage1(only: Path | None = None, progress: Progress = None) -> Non
 
     verified = sum(1 for r in all_rows if (r.get("verification", {}) or {}).get("status") == "verified")
     unreachable = sum(1 for r in all_rows if r.get("source_reachable") is False)
+    ungrounded = sum(1 for r in all_rows if r.get("reading_grounded") is False)
+    read_live = len(all_rows) - unreachable
     if not config.DRY_RUN:
         print(f"  spend: {client.usage_line()}")
     print(f"stage 1 done: {len(all_rows)} rows ({verified} verified), "
           f"{len(all_dropped)} dropped. Review review/ then run --stage 2.")
     print(f"  coverage: {orgs_with_rows} of {orgs_scanned} organizations yielded approaches, "
-          f"{orgs_with_reports} had reports found"
+          f"{orgs_with_reports} had reports found, {read_live} of {len(all_rows)} rows read from a live source"
           + (f", {len(dupes)} duplicates merged" if dupes else "")
-          + (f", {unreachable} rows rest on a source that could not be read directly" if unreachable else "")
+          + (f", {unreachable} rest on an unreadable source" if unreachable else "")
+          + (f", {ungrounded} flagged where the reading was not found in the source" if ungrounded else "")
           + ".")
     errs = [r.get("error", "") for r in results if r.get("error")]
     if not all_rows:
@@ -501,6 +526,30 @@ async def run_stage2() -> None:
         t["member_details"] = md
 
     _apply_top2(themes)  # guarantee the two cleanest new areas are named
+
+    # two-source corroboration for the entry themes: confirm each one's central
+    # finding on an INDEPENDENT source, so the recommendations do not rest on one
+    entry = [t for t in themes if t.get("posture") == "enter"]
+    if entry:
+        print(f"stage 2: corroborating {len(entry)} entry themes on a second source")
+        detail = {r["name"]: r for r in kept}
+        for t in entry:
+            m = t.get("marquee", "") or (t.get("members") or [""])[0]
+            r = detail.get(m, {})
+            claim = f"{t.get('name','')}: {m}. {r.get('what','')} {r.get('evidence','')}".strip()
+            try:
+                corr = await agents.corroborate(ctx, claim)
+            except Exception:
+                corr = {"corroborated": False, "source": "", "url": "", "quote": "", "note": "check failed"}
+            # a dead or unresolved second-source link does not corroborate anything
+            cu = corr.get("url", "")
+            if corr.get("corroborated") and cu and not config.DRY_RUN \
+                    and await asyncio.to_thread(sources.link_dead, cu):
+                corr["corroborated"] = False
+                corr["url"] = ""
+                corr["note"] = (corr.get("note", "") + " (second-source link did not resolve)").strip()
+            t["corroboration"] = corr
+
     synth = await agents.synthesize(ctx, themes)
 
     memo = guardrail.scrub(synth.get("memo_markdown", ""))
