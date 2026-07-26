@@ -35,10 +35,15 @@ WEB_MAX_USES = int(os.environ.get("WEB_MAX_USES", "6"))
 PROVIDER = os.environ.get("SCAN_PROVIDER", "anthropic")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-# When PROVIDER=openrouter this single model runs every stage, so you can A/B a
-# whole scan on one model, then swap and compare. Set it, e.g. openai/gpt-5,
-# google/gemini-2.5-pro, anthropic/claude-opus-4.1.
+# When PROVIDER=openrouter this model runs the finding, reading, and web stages,
+# where a cheap model is enough. Set it, e.g. openai/gpt-4o-mini.
 OR_MODEL = os.environ.get("OR_MODEL", "")
+# The stronger model for the writing and judgment stages (scoring, auditing,
+# theming, and the memo), where prose quality and reasoning matter. It runs only on
+# stages that do NOT use the web plugin, since Claude underperforms through it, so
+# the cheap model keeps the search while this model writes. Empty means use OR_MODEL
+# for everything.
+OR_MODEL_STRONG = os.environ.get("OR_MODEL_STRONG", "anthropic/claude-sonnet-4")
 OR_REFERER = os.environ.get("OR_REFERER", "https://acet-horizon-scan.local")
 OR_TITLE = os.environ.get("OR_TITLE", "ACET Horizon Scan")
 

@@ -404,7 +404,7 @@ async def score(ctx: dict[str, str], approach: dict[str, Any]) -> dict[str, Any]
     sp = config.active_spec()
     out = await structured_call(
         model=config.MODEL_SONNET, frame=_frame(ctx, ["mission", "scope", "scoring"], SCORER_I),
-        user=user, schema=spec.score_schema(sp), effort="low",
+        user=user, schema=spec.score_schema(sp), effort="low", tier="strong",
     )
     dumped, coerced = spec.coerce_score(out, sp)
     dumped["_coerced"] = coerced
@@ -450,7 +450,7 @@ async def audit(ctx: dict[str, str], row: dict[str, Any]) -> dict[str, Any]:
             f"confirming quote: {v.get('confirming_quote','')}\nSource: {row.get('url','')}")
     out = await structured_call(
         model=config.MODEL_SONNET, frame=_frame(ctx, ["mission", "scoring"], AUDIT_I),
-        user=user, schema=schemas.AUDIT_SCHEMA, effort="low",
+        user=user, schema=schemas.AUDIT_SCHEMA, effort="low", tier="strong",
     )
     dumped = schemas.Audit(**_coerce_audit(out)).model_dump()
     dumped["_coerced"] = _defaulted(out, {"score_matches_evidence": _CONSIST, "verdict": {"pass", "flag"}})
@@ -462,7 +462,7 @@ async def seed_hunches(ctx: dict[str, str], titles: list[str]) -> list[dict[str,
     out = await structured_call(
         model=config.MODEL_SONNET,
         frame=_frame(ctx, ["mission"], "List a few cross-org patterns worth a human second look. Seed only, label each as a hunch."),
-        user=user, schema=schemas.HUNCH_SCHEMA, effort="low",
+        user=user, schema=schemas.HUNCH_SCHEMA, effort="low", tier="strong",
     )
     return out.get("patterns", [])
 
@@ -534,7 +534,7 @@ async def themes(ctx: dict[str, str], rows: list[dict[str, Any]], hunches: str) 
     out = await structured_call(
         model=config.MODEL_OPUS,
         frame=_frame(ctx, ["mission", "scope", "scoring", "themes"], THEMER_I),
-        user=user, schema=spec.themes_schema(sp), max_tokens=8192, effort="high",
+        user=user, schema=spec.themes_schema(sp), max_tokens=8192, effort="high", tier="strong",
     )
     return [spec.coerce_theme(t, sp) for t in out.get("themes", [])]
 
@@ -547,7 +547,7 @@ async def synthesize(ctx: dict[str, str], themes_list: list[dict[str, Any]]) -> 
     # headroom rather than silently ship a memo cut off mid-sentence
     for budget in (24000, 32000):
         out = await structured_call(model=config.MODEL_OPUS, frame=frame, user=user,
-                                    schema=schemas.SYNTH_SCHEMA, max_tokens=budget, effort="high")
+                                    schema=schemas.SYNTH_SCHEMA, max_tokens=budget, effort="high", tier="strong")
         if not out.pop("_truncated", False):
             return out
     print("  synth: memo still hit the token limit after retry, delivering the fullest draft")

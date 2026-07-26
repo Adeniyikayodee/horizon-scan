@@ -76,7 +76,8 @@ def or_client() -> Any:
 
 
 async def _openrouter_call(
-    frame: str, user: str, schema: dict[str, Any], web: bool, max_tokens: int
+    frame: str, user: str, schema: dict[str, Any], web: bool, max_tokens: int,
+    or_model: str | None = None,
 ) -> dict[str, Any]:
     """Run one stage on OpenRouter. Structured output via a forced `record`
     function; web via OpenRouter's web plugin so browsing stages still work."""
@@ -92,7 +93,7 @@ async def _openrouter_call(
     if web:
         body["plugins"] = [{"id": "web", "max_results": config.WEB_MAX_USES}]
     resp = await or_client().chat.completions.create(
-        model=config.OR_MODEL,
+        model=or_model or config.OR_MODEL,
         max_tokens=max_tokens,
         temperature=config.TEMPERATURE,
         messages=[
@@ -105,7 +106,7 @@ async def _openrouter_call(
     )
     _account(resp)
     if not getattr(resp, "choices", None):
-        raise RuntimeError(f"openrouter {config.OR_MODEL}: empty response (no choices)")
+        raise RuntimeError(f"openrouter {or_model or config.OR_MODEL}: empty response (no choices)")
     msg = resp.choices[0].message
     if getattr(msg, "tool_calls", None):
         args = msg.tool_calls[0].function.arguments
@@ -116,7 +117,7 @@ async def _openrouter_call(
             return json.loads(msg.content)
         except Exception:
             pass
-    raise RuntimeError(f"openrouter {config.OR_MODEL}: no valid structured output returned")
+    raise RuntimeError(f"openrouter {or_model or config.OR_MODEL}: no valid structured output returned")
 
 
 def record_tool(schema: dict[str, Any]) -> dict[str, Any]:
@@ -157,8 +158,12 @@ async def structured_call(
     web: bool = False,
     max_tokens: int = 4096,
     effort: str | None = None,
+    tier: str = "base",
 ) -> dict[str, Any]:
-    """Run a stage and return the validated `record` input as a dict."""
+    """Run a stage and return the validated `record` input as a dict. `tier`
+    is "strong" for the writing and judgment stages; on the OpenRouter path a
+    strong non-web stage routes to OR_MODEL_STRONG so a better model writes the
+    memo and scores while the cheap model keeps the web search."""
     if config.DRY_RUN:
         return mock.mock_response(schema, user)
     if config.PROVIDER == "openrouter":
@@ -167,7 +172,10 @@ async def structured_call(
         if config.anthropic_via_openrouter() and config.API_KEY:
             model = config.native_anthropic_id(config.OR_MODEL)
         else:
-            return await _openrouter_call(frame, user, schema, web, max_tokens)
+            or_model = config.OR_MODEL
+            if tier == "strong" and not web and config.OR_MODEL_STRONG:
+                or_model = config.OR_MODEL_STRONG    # a strong model for the writing stages
+            return await _openrouter_call(frame, user, schema, web, max_tokens, or_model)
 
     rec = record_tool(schema)
     system = _system_blocks(frame)
