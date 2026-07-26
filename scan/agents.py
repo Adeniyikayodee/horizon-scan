@@ -106,6 +106,12 @@ touches economic transformation or research-to-policy, record the name, one
 sentence on what it does, the year, a direct link to the organization's own
 page, and what kind of source it is.
 
+For the link, use ONLY a URL that appears in your search results, copied exactly,
+character for character. Never construct, guess, complete, shorten, or correct a
+URL from memory, and never assemble a plausible-looking path. If you do not have a
+real URL from the results for a program, use the organization's homepage instead,
+or leave it out. A wrong link is worse than no link.
+
 Favor funders, practitioners, and policy labs over the academic frontier, since
 that frontier is mostly working papers not yet operationalized. Skip programs
 that are squarely part of the hub's existing portfolio (listed in scope), we are
@@ -329,9 +335,11 @@ Cover the whole window: look for the latest publications as well as the earlier
 ones, so the span is fully swept, and page through the index rather than stopping
 at the first year you see. Prefer primary documents, PDFs and named publications,
 over landing or about pages. Search the organization's publications, research, or
-reports index. For each, give the title, the date, a direct link (a PDF link where
-one exists), and the type. Search the web, then call record once. If you find
-none, record an empty list.
+reports index. For each, give the title, the date, a direct link, and the type.
+Use ONLY a URL that appears in your search results, copied exactly, never one you
+construct, guess, complete, or remember, since a wrong link is worse than no link.
+If you do not have a real URL for a report from the results, leave that report out.
+Search the web, then call record once. If you find none, record an empty list.
 """
 
 

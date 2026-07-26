@@ -285,9 +285,14 @@ def card_html(r: dict) -> str:
         report_html = ""
     src = (f'<div class="hs-kv" style="margin-top:6px"><b>{src_label}.</b> '
            f'<a href="{url}" target="_blank">{url}</a></div>' if url else "")
-    reach_html = ('<div class="hs-kv" style="color:var(--bad)"><b>Coverage note.</b> the source '
-                  'could not be read directly, this row rests on search results</div>'
-                  if r.get("source_reachable") is False else "")
+    if r.get("dead_url") and not url:
+        reach_html = ('<div class="hs-kv" style="color:var(--bad)"><b>No confirmed source.</b> '
+                      'the proposed link did not resolve and was removed, treat this row as unconfirmed</div>')
+    elif r.get("source_reachable") is False:
+        reach_html = ('<div class="hs-kv" style="color:var(--bad)"><b>Coverage note.</b> the source '
+                      'could not be read directly, this row rests on search results</div>')
+    else:
+        reach_html = ""
     return (f'<div class="hs-card"><div class="an">{r.get("name","")} &nbsp;{chip}{flagchip} {bandchip}</div>'
             + provenance_html(r)
             + f'<div class="hs-kv"><b>What it is.</b> {r.get("what","")}</div>'

@@ -240,24 +240,37 @@ async def _process_org(ctx, org, sem, progress: Progress = None) -> dict[str, An
             })
             await tick()
 
-        # 4b. link health: never present a dead or soft-404 source. Check every
-        # row's URL; if it is gone, repoint to the Verifier's confirmed live
-        # primary where one exists, otherwise flag it honestly.
+        # 4b. link health: a dead, fabricated, or soft-404 URL must never be shown.
+        # Check every row's URL, and the Verifier's primary as a possible fallback.
+        # If neither resolves, the link is REMOVED, not just flagged, so no dead or
+        # invented URL ever reaches a card, a dossier, or the map.
         if rows and not config.DRY_RUN:
             emit(verify="run", note=f"checking {len(rows)} source links")
             statuses = await asyncio.gather(
                 *[asyncio.to_thread(sources.link_status, r.get("url", "")) for r in rows])
             for row, stt in zip(rows, statuses):
                 row["link_status"] = stt
-                if stt in ("dead", "empty"):
-                    vurl = (row.get("verification") or {}).get("primary_url", "")
-                    if vurl and vurl != row.get("url") and not await asyncio.to_thread(
-                            sources.link_dead, vurl):
-                        row["url"] = vurl              # swap to the live primary
-                        row["link_repointed"] = True
-                        row["report_title"] = ""       # it is no longer that report
-                    else:
-                        row["source_reachable"] = False  # surfaces the coverage note
+                if stt not in ("dead", "empty"):
+                    continue
+                vurl = (row.get("verification") or {}).get("primary_url", "")
+                vlive = bool(vurl) and vurl != row.get("url") and not await asyncio.to_thread(
+                    sources.link_dead, vurl)
+                if vlive:
+                    row["url"] = vurl                    # swap to the live primary
+                    row["link_repointed"] = True
+                    row["report_title"] = ""             # it is no longer that report
+                else:
+                    # no live source exists: strip the dead link and hold the row to
+                    # partial, so it is kept for the analyst but never cites a bad URL
+                    row["dead_url"] = row.get("url", "")  # kept internally for audit only
+                    row["url"] = ""
+                    row["report_title"] = ""
+                    row["source_reachable"] = False
+                    v = row.get("verification") or {}
+                    if v.get("status") == "verified":
+                        v["status"] = "partial"
+                    v["note"] = (v.get("note", "") + " (source link did not resolve, removed)").strip()
+                    row["verification"] = v
             await tick()
 
         # 5. audit the whole chain for consistency, then settle each row
