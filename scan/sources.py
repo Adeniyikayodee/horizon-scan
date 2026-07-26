@@ -181,12 +181,22 @@ def _extract_full(url: str) -> str:
 
 
 _LINK_CACHE: dict[str, str] = {}
-# phrases a soft-404 page shows with a 200 status, checked near the top of the body
-_NOTFOUND_MARKERS = (
+# strong signatures of a page with no real content, an error page, an empty search,
+# or a placeholder. If one of these leads the page (top of the body), the page is
+# treated as dead even though it returned a 200 status.
+_DEAD_MARKERS = (
     "page not found", "404 error", "error 404", "page you requested",
-    "page you were looking for", "page you are looking for", "no longer available",
-    "content not found", "couldn't find", "could not be found", "does not exist",
-    "we can't find", "we cannot find", "sorry, this page")
+    "page you were looking for", "page you are looking for", "page cannot be found",
+    "page could not be found", "page does not exist", "this page does not exist",
+    "no results found", "no results were found", "no matching results",
+    "0 results found", "nothing found", "nothing to show", "no content available",
+    "content unavailable", "content not available", "content not found",
+    "under construction", "under maintenance", "coming soon", "sorry, this page",
+    "we can't find the", "we cannot find the", "we couldn't find the",
+    "requested page could not", "could not be found")
+# weaker signals, counted only when the page is also short or bounced to the home
+_WEAK_MARKERS = ("no longer available", "temporarily unavailable", "not available",
+                 "does not exist", "no records", "no items", "no data available")
 _HOME_PATHS = {"", "home", "en", "index", "index.html", "index.php", "en/home"}
 
 
@@ -233,15 +243,18 @@ def link_status(url: str) -> str:
     from urllib.parse import urlparse
     text = _html_to_text(raw.decode("utf-8", "ignore"))
     low = text.lower()
+    top = low[:2000]                                     # page-level messages sit near the top
     landed_home = urlparse(final).path.strip("/").lower() in _HOME_PATHS
     req_was_deep = len(urlparse(url).path.strip("/")) > 1
-    hit = any(m in low for m in _NOTFOUND_MARKERS)
-    # soft-404: a not-found phrase with little content, or a deep link bounced home
-    if hit and (landed_home or len(text) < 1800):
+    # a strong no-content or error signature leading the page: dead, even at 200
+    if any(m in top for m in _DEAD_MARKERS):
+        return _finish("dead")
+    # a weaker signal only counts when the page is also thin or bounced to the home
+    if any(m in low for m in _WEAK_MARKERS) and (landed_home or len(text) < 1800):
         return _finish("dead")
     if landed_home and req_was_deep and len(text) < 1200:
         return _finish("dead")
-    if len(text.strip()) < 200:
+    if len(text.strip()) < 250:                          # blank, placeholder, or JS shell
         return _finish("empty")
     return _finish("ok")
 

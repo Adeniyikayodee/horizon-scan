@@ -82,6 +82,13 @@ def _fake_resp(body: str, final: str, ctype: str = "text/html"):
     ("<h1>Page not found</h1><p>Sorry, this page could not be found.</p>",
      "https://site.org/report/x", "dead"),                       # soft-404, marker + short
     ("<nav>Home About</nav>" + "filler " * 20, "https://site.org/", "dead"),  # bounced home
+    ("<h1>No results found</h1><p>Your search returned nothing.</p>",
+     "https://site.org/search", "dead"),                         # empty search page
+    ("<h1>Under construction</h1><p>Check back soon.</p>",
+     "https://site.org/report/x", "dead"),                       # placeholder page
+    ("<nav>Home About Work</nav><h1>Nothing to show here</h1>" + "x " * 200,
+     "https://site.org/report/y", "dead"),                       # no-content page with chrome
+    ("<h1>Content unavailable</h1>", "https://site.org/report/z", "dead"),
     ("<h1>Blue Economy Report</h1>" + "Real analysis of coastal value addition. " * 80,
      "https://site.org/report/blue-economy", "ok"),
 ])
