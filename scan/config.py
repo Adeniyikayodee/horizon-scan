@@ -131,7 +131,7 @@ def load_context() -> dict[str, str]:
         gp = CONTEXT_DIR / "mission_global.md"
         if gp.exists():
             ctx["mission"] = gp.read_text(encoding="utf-8")
-    for name in ("themes", "output_spec", "policy"):
+    for name in ("themes", "output_spec", "policy", "exemplar"):
         p = CONTEXT_DIR / f"{name}.md"
         ctx[name] = p.read_text(encoding="utf-8") if p.exists() else ""
     return ctx

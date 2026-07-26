@@ -539,7 +539,7 @@ async def themes(ctx: dict[str, str], rows: list[dict[str, Any]], hunches: str) 
     user = "Kept approaches:\n" + "\n".join(lines) + f"\n\nAnalyst hunches:\n{hunches}"
     out = await structured_call(
         model=config.MODEL_OPUS,
-        frame=_frame(ctx, ["mission", "scope", "scoring", "themes"], THEMER_I),
+        frame=_frame(ctx, ["mission", "scope", "scoring", "themes", "exemplar"], THEMER_I),
         user=user, schema=spec.themes_schema(sp), max_tokens=8192, effort="high", tier="strong",
     )
     return [spec.coerce_theme(t, sp) for t in out.get("themes", [])]
@@ -548,7 +548,7 @@ async def themes(ctx: dict[str, str], rows: list[dict[str, Any]], hunches: str) 
 async def synthesize(ctx: dict[str, str], themes_list: list[dict[str, Any]]) -> dict[str, str]:
     import json
     user = "Themes and scores:\n" + json.dumps(themes_list, ensure_ascii=False, indent=2)
-    frame = _frame(ctx, ["mission", "output_spec"], SYNTH_I)
+    frame = _frame(ctx, ["mission", "output_spec", "exemplar"], SYNTH_I)
     # the memo must be complete: if it hits the token limit, retry once with more
     # headroom rather than silently ship a memo cut off mid-sentence
     for budget in (24000, 32000):
