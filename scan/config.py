@@ -22,6 +22,10 @@ MODEL_OPUS = os.environ.get("MODEL_OPUS", "claude-opus-4-8")
 MODEL_SONNET = os.environ.get("MODEL_SONNET", MODEL_OPUS)
 MODEL_HAIKU = os.environ.get("MODEL_HAIKU", MODEL_OPUS)
 
+# Deterministic decoding: temperature 0 everywhere, so the model does not invent
+# URLs, figures, or facts. This is a hard default; override only for experiments.
+TEMPERATURE = float(os.environ.get("SCAN_TEMPERATURE", "0"))
+
 # Anthropic server-side web search tool.
 WEB_SEARCH_TYPE = os.environ.get("WEB_SEARCH_TYPE", "web_search_20250305")
 WEB_MAX_USES = int(os.environ.get("WEB_MAX_USES", "6"))

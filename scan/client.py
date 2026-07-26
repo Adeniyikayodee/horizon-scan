@@ -94,6 +94,7 @@ async def _openrouter_call(
     resp = await or_client().chat.completions.create(
         model=config.OR_MODEL,
         max_tokens=max_tokens,
+        temperature=config.TEMPERATURE,
         messages=[
             {"role": "system", "content": frame},
             {"role": "user", "content": user},
@@ -177,6 +178,7 @@ async def structured_call(
         resp = await client().messages.create(
             model=model,
             max_tokens=max_tokens,
+            temperature=config.TEMPERATURE,
             system=system,
             messages=messages,
             tools=[rec],
@@ -200,6 +202,7 @@ async def structured_call(
         resp = await client().messages.create(
             model=model,
             max_tokens=max_tokens,
+            temperature=config.TEMPERATURE,
             system=system,
             messages=messages,
             tools=tools,
@@ -221,6 +224,7 @@ async def structured_call(
         forced = await client().messages.create(
             model=model,
             max_tokens=max_tokens,
+            temperature=config.TEMPERATURE,
             system=system,
             messages=messages,
             tools=[rec],
