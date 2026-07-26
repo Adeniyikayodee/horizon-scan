@@ -18,6 +18,8 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
+from . import config
+
 _BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal"}
 
 
@@ -166,18 +168,73 @@ def _pdf_to_text(data: bytes) -> str:
 _TEXT_CACHE: dict[str, str] = {}
 
 
+_PROXY_CACHE: dict[str, str] = {}
+
+
+def _fetch_via_proxy(url: str) -> str:
+    """Fetch a URL through the reader proxy, which renders and de-protects the page
+    and returns clean text. Used only as a fallback for bot-protected or JS-rendered
+    pages a direct fetch cannot read. '' on any failure or when disabled. Cached."""
+    if not config.READER_PROXY or not url.lower().startswith(("http://", "https://")) \
+            or "example.org" in url or _is_internal(url):
+        return ""
+    if url in _PROXY_CACHE:
+        return _PROXY_CACHE[url]
+    out = ""
+    try:
+        req = urllib.request.Request(config.READER_PROXY + url,
+                                     headers={**HEADERS, "Accept": "text/plain"})
+        with urllib.request.urlopen(req, timeout=30, context=_SSL) as resp:
+            data = resp.read(MAX_BYTES + 1)
+        if len(data) <= MAX_BYTES:
+            out = re.sub(r"\n{3,}", "\n\n", data.decode("utf-8", "ignore")).strip()[:400000]
+    except Exception:
+        out = ""
+    if len(_PROXY_CACHE) >= 128:
+        _PROXY_CACHE.clear()
+    _PROXY_CACHE[url] = out
+    return out
+
+
+def _proxy_verdict(url: str) -> str:
+    """What the reader proxy reveals about a page a direct fetch could not read:
+    "ok" (real content), "dead" (the proxy reached it and it is an error or
+    not-found page), or "" (the proxy could not read it either, undetermined)."""
+    proxied = _fetch_via_proxy(url)
+    if not proxied:
+        return ""
+    if _bad_proxy_content(proxied):
+        return "dead"
+    return "ok" if len(proxied) >= 500 else ""
+
+
+def _bad_proxy_content(text: str) -> bool:
+    """The proxy returns content even for a page that 404s or is a not-found page,
+    wrapping it with a 'Target URL returned error' warning. Reject that, and any
+    proxy body that leads with a no-content signature, so a dead page read through
+    the proxy is not mistaken for a real document."""
+    low = text[:2000].lower()
+    return ("returned error" in low or "target url returned" in low
+            or any(m in low for m in _DEAD_MARKERS))
+
+
 def _extract_full(url: str) -> str:
+    text = ""
     data, ctype = _read_source(url)
-    if data is None:
-        return ""
-    is_pdf = ctype == "application/pdf" or url.lower().split("?")[0].endswith(".pdf")
-    if is_pdf:
-        text = _pdf_to_text(data)
-    elif ctype in ("text/html", "text/plain", "application/xhtml+xml", ""):
-        text = _html_to_text(data.decode("utf-8", "ignore"))
-    else:
-        return ""
-    return re.sub(r"\n{3,}", "\n\n", text).strip()[:400000]
+    if data is not None:
+        is_pdf = ctype == "application/pdf" or url.lower().split("?")[0].endswith(".pdf")
+        if is_pdf:
+            text = _pdf_to_text(data)
+        elif ctype in ("text/html", "text/plain", "application/xhtml+xml", ""):
+            text = _html_to_text(data.decode("utf-8", "ignore"))
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()[:400000]
+    # bot-protected, JS-rendered, or too thin to be the real document: try the proxy,
+    # but only trust proxy content that is a real document, not a wrapped error page
+    if len(text) < 500:
+        proxied = _fetch_via_proxy(url)
+        if len(proxied) > len(text) and not _bad_proxy_content(proxied):
+            text = proxied
+    return text
 
 
 _LINK_CACHE: dict[str, str] = {}
@@ -231,8 +288,12 @@ def link_status(url: str) -> str:
             ctype = (resp.headers.get_content_type() or "").lower()
             raw = resp.read(65536)                           # first 64 KB is enough
     except urllib.error.HTTPError as e:
-        return _finish("dead" if e.code in (404, 410) else
-                       "blocked" if e.code in (401, 403, 429) else "unknown")
+        if e.code in (404, 410):
+            return _finish("dead")
+        if e.code in (401, 403, 429):
+            # bot-protected: the reader proxy often reveals real content, or an error page
+            return _finish(_proxy_verdict(url) or "blocked")
+        return _finish("unknown")
     except Exception:
         return _finish("unknown")
 
@@ -255,7 +316,8 @@ def link_status(url: str) -> str:
     if landed_home and req_was_deep and len(text) < 1200:
         return _finish("dead")
     if len(text.strip()) < 250:                          # blank, placeholder, or JS shell
-        return _finish("empty")
+        # a JS-rendered page reads empty to a static fetch, let the proxy decide
+        return _finish(_proxy_verdict(url) or "empty")
     return _finish("ok")
 
 

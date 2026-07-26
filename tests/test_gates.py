@@ -66,6 +66,23 @@ def test_public_host_not_flagged_internal():
     assert S._is_internal("http://93.184.216.34/") is False
 
 
+def test_bad_proxy_content_rejects_error_pages():
+    # the reader proxy wraps a failed target with an error warning; reject that
+    assert S._bad_proxy_content("Title: X\nWarning: Target URL returned error 404: Not Found\n...")
+    assert S._bad_proxy_content("Page not found. Nothing here to see.")
+    assert not S._bad_proxy_content("Blue Economy Report. " + "Real coastal value analysis. " * 50)
+
+
+def test_proxy_verdict(monkeypatch):
+    monkeypatch.setattr(S, "_fetch_via_proxy", lambda url: "")               # proxy can't read
+    assert S._proxy_verdict("https://x.org/a") == ""
+    monkeypatch.setattr(S, "_fetch_via_proxy",
+                        lambda url: "Warning: Target URL returned error 403")  # error page
+    assert S._proxy_verdict("https://x.org/a") == "dead"
+    monkeypatch.setattr(S, "_fetch_via_proxy", lambda url: "Real report content. " * 60)
+    assert S._proxy_verdict("https://x.org/a") == "ok"
+
+
 def _fake_resp(body: str, final: str, ctype: str = "text/html"):
     class R:
         def geturl(self): return final

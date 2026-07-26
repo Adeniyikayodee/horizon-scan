@@ -30,6 +30,12 @@ TEMPERATURE = float(os.environ.get("SCAN_TEMPERATURE", "0"))
 WEB_SEARCH_TYPE = os.environ.get("WEB_SEARCH_TYPE", "web_search_20250305")
 WEB_MAX_USES = int(os.environ.get("WEB_MAX_USES", "6"))
 
+# Reader proxy: a fetch-and-render service used ONLY as a fallback when a direct
+# fetch is blocked or empty (bot-protected sites like afdb.org and unctad.org, and
+# JavaScript-rendered pages). It returns clean readable text, so the Reader reads
+# the real document instead of search snippets. Set to "" to disable.
+READER_PROXY = os.environ.get("READER_PROXY", "https://r.jina.ai/")
+
 # Provider: "anthropic" (native web_search + prompt caching) or "openrouter"
 # (OpenAI-compatible, to run the same agents on other models and compare).
 PROVIDER = os.environ.get("SCAN_PROVIDER", "anthropic")
