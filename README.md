@@ -98,19 +98,64 @@ framed automatically so they sit alongside the discovered ones.
 
 ## Configuration
 
-- Models. Every stage runs on Opus 4.8 by default. Set `MODEL_SONNET` and
-  `MODEL_HAIKU` in `.env` to run the judgment and the mechanical stages on cheaper
-  tiers.
+- Models. On the OpenRouter path the finding and web stages run on `OR_MODEL` (a
+  cheap model, gpt-4o-mini), while reading the reports and every writing and
+  judgment stage run on `OR_MODEL_STRONG` (a strong model, `anthropic/claude-sonnet-4`
+  by default). On the native Anthropic path every stage runs on Opus 4.8 unless you
+  set `MODEL_SONNET` and `MODEL_HAIKU` to cheaper tiers. Temperature is 0 everywhere
+  so the model does not invent URLs or facts.
+- Reader proxy. Bot-protected or JavaScript-rendered pages (afdb.org, unctad.org)
+  are read through a proxy, `READER_PROXY` (`https://r.jina.ai/` by default), only
+  when a direct fetch fails. Set it to "" to disable.
 - Recency window. The scan keeps only sources published in a window, 2023 to 2026
   by default. Change it in one place with `SCAN_YEAR_MIN` and `SCAN_YEAR_MAX`, and
   both the enforcement and the agent instructions follow.
-- Provider. Anthropic is the default, with native web search and prompt caching.
-  Set `SCAN_PROVIDER=openrouter` and `OR_MODEL`, or pass `--provider openrouter
-  --model <id>`, to run the same agents on another model and compare the results.
+- Provider. Set `SCAN_PROVIDER=openrouter` with `OR_MODEL` and `OR_MODEL_STRONG`, or
+  `SCAN_PROVIDER=anthropic` with an `ANTHROPIC_API_KEY` for native web search and
+  prompt caching.
 - Scope. The scan targets Africa by default. Pass `--scope global`, or set
   `SCAN_MODE=global`, to scan any region and note the transfer to Africa.
 - Test mode. `--dry-run` (or `SCAN_DRY_RUN=1`) runs the whole pipeline on canned
   data with no key and no network, so the flow can be checked at zero cost.
+
+## Cost
+
+The tool pays per unit of text the models read and write, so cost tracks how much
+reading and writing a scan does. OpenRouter passes the model prices through with no
+markup on usage, and adds about 5.5 percent only when you top up credits.
+
+- Cheap model, gpt-4o-mini, does the searching and discovery, about $0.15 and $0.60
+  per million tokens in and out.
+- Strong model, Claude Sonnet 4, reads the reports and writes, about $3 and $15 per
+  million, and is the main cost.
+
+A measured run of 20 self-discovered organizations cost $2.52 ($2.24 on Sonnet 4,
+$0.28 on gpt-4o-mini), about $0.13 per organization. As a guide, and these are
+estimates on current prices:
+
+| Organizations | Cost per scan |
+|---|---|
+| 10 | about $1.30 |
+| 20 | about $2.50 (measured) |
+| 30 | about $3.80 |
+| 50 | about $6.30 |
+| dry-run (test) | free |
+
+At 50 organizations, a monthly scan is about $6 a month (about $75 a year) and a
+weekly scan is about $25 a month (about $300 a year).
+
+## Caching and resume
+
+Two different things, and they behave differently across runs:
+
+- Instruction (prompt) caching runs only on the native Anthropic path, not through
+  OpenRouter, and it is short-lived (about 5 minutes), so it saves cost within a
+  single run, not across separate runs.
+- Result caching (resume) works across runs: stage 1 skips organizations already
+  scanned (cached in `work/orgs/<id>.jsonl`), so re-running the same scan is cheap
+  and only pays for new organizations. Stage 2 (theming and the memo) re-runs each
+  time, about 40 to 50 cents. Delete an organization's file to force a re-scan, or
+  start a fresh scan for full cost.
 
 ## The organization sheet
 
