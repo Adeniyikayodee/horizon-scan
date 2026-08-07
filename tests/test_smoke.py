@@ -61,12 +61,31 @@ def test_full_dry_run() -> None:
     # author stamped on the workbooks
     assert load_workbook(scorecard).properties.creator == "Kayode Adeniyi"
 
-    # hard constraint: an existing theme is always deepen, never enter
+    # hard constraint: an existing theme is always deepen, never enter. The mock now
+    # emits deliberately non-compliant themes, so this assertion can actually fail.
     rows = list(load_workbook(scorecard).active.iter_rows(values_only=True))
-    for r in rows[3:]:  # skip intro, blank, header
+    body = [r for r in rows[3:] if r and r[0]]
+    by_name = {r[0]: r for r in body}
+    for r in body:
         standing, posture = r[1], r[6]
         if standing == "existing":
             assert posture == "deepen", f"existing theme not deepen: {r[0]}"
+
+    # a theme tagged existing but asking to enter was corrected
+    fin = by_name.get("Financing Africa's future")
+    assert fin and fin[6] == "deepen", "coerce_theme did not hold the existing theme to deepen"
+
+    # and a theme tagged NEW that names existing work was caught by the portfolio screen
+    ai = by_name.get("AI-driven policy experimentation platforms")
+    assert ai and (ai[1], ai[6]) == ("existing", "deepen"), \
+        "the portfolio screen let existing work through as a new area"
+    assert ai[8] != "yes", "screened theme must never be named a top area to enter"
+    screen = (config.REVIEW_DIR / "theme_screen.md").read_text(encoding="utf-8")
+    assert "AI-driven policy experimentation platforms" in screen
+
+    # the memo satisfies the shape the spec asks for
+    from scan import spec as _spec
+    assert _spec.memo_shortfall(memo.read_text(encoding="utf-8"), config.active_spec()) == ""
 
 
 if __name__ == "__main__":

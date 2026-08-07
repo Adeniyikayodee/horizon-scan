@@ -9,6 +9,7 @@ today's ACET DEPTH frame, so behavior is unchanged until a researcher edits it.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 _MARKS = {"strong", "partial", "weak"}
@@ -88,13 +89,105 @@ DEFAULT_SPEC = {
         "report read and source cited must fall within it, and each source's date is always recorded. "
         "Primary sources only, the organization's own page, report, or database.\n"
         "- Existing programs stay out of scope. Keep looking past familiar ground toward open areas.\n"
-        "- Favor funders, practitioners, and policy labs over the academic frontier.\n\n"
-        "## Existing programs, treat as covered ground, never as new (posture deepen)\n"
-        "Industrial policy; green industrialization and the just transition; financing Africa's future "
-        "(development and blended finance, debt, domestic resource mobilization, adaptation finance); the "
-        "digital economy, DPI, and AI; jobs, skills, and education including TVET; regional value chains "
-        "including cotton and cocoa; health finance; the care economy.\n\n"
-        "The goal is new areas to enter. An existing theme can never carry the enter posture, only deepen."),
+        "- Favor funders, practitioners, and policy labs over the academic frontier."),
+    # The institute's existing portfolio, as DATA. This one list has two consumers:
+    # excluded_text() renders it into every agent frame, and screen_existing()
+    # enforces it in code after theming. The prompt and the gate therefore read the
+    # same source and cannot drift, the pattern config.window_rule() already uses
+    # for the recency window.
+    "excluded_areas": [
+        {"name": "Industrial policy and productive transformation",
+         "terms": ["industrial policy", "industrial strategy", "productive transformation",
+                   "manufacturing policy", "structural transformation policy"]},
+        {"name": "Green industrialization and the just transition",
+         "terms": ["green industrialization", "green industrialisation", "just transition",
+                   "climate industrial policy", "green growth strategy"]},
+        {"name": "Financing Africa's future",
+         "terms": ["blended finance", "development finance", "domestic resource mobilization",
+                   "domestic resource mobilisation", "debt sustainability", "sovereign debt",
+                   "illicit financial flows", "adaptation finance", "natural capital finance",
+                   "tax policy", "compact with africa"]},
+        {"name": "Digital economy, DPI, and AI",
+         "terms": ["digital economy", "digital public infrastructure", "dpi", "artificial intelligence",
+                   "ai", "machine learning", "data governance", "digital policy", "digitalization",
+                   "digitalisation", "digital transformation", "synthetic data"]},
+        {"name": "Jobs, skills, and education",
+         "terms": ["tvet", "skills development", "education quality", "youth employment",
+                   "jobs and skills", "vocational training", "workforce development",
+                   "labour market policy", "labor market policy"]},
+        {"name": "Regional value chains and regional integration",
+         "terms": ["regional value chain", "regional integration", "cotton value chain",
+                   "cocoa value chain", "afcfta", "continental free trade"]},
+        {"name": "Health finance",
+         "terms": ["health financing", "health finance", "universal health coverage"]},
+        {"name": "Care economy",
+         "terms": ["care economy", "unpaid care", "care work"]},
+    ],
+    # The memo's shape, as DATA. One definition with two consumers: the Synthesizer's
+    # frame renders the heading list from it, and memo_shortfall() checks the delivered
+    # memo against it. Before this the length lived in two places, agents.SYNTH_I asked
+    # for eight to twelve pages while context/output_spec.md asked for two to three, and
+    # the model followed the shorter. Length is stated ONCE, in words, and the page
+    # figure shown to the model is derived from it, so the two cannot disagree.
+    "memo": {
+        "min_words": 4000,
+        "words_per_page": 450,
+        "sections": [
+            {"heading": "Executive summary",
+             "guidance": "Open with the recommendation itself, then the shape of the set, in three "
+                         "or four substantial paragraphs. Lead hard on the two cleanest areas to "
+                         "enter first, name them plainly, and frame the remaining entry themes as a "
+                         "second tier, each a tightly scoped brief rather than a full program, so "
+                         "the recommendation reads as genuinely concentrated."},
+            {"heading": "Purpose and scope",
+             "guidance": "A paragraph on the question the scan answers and what counts as in scope "
+                         "or out."},
+            {"heading": "Method in brief",
+             "guidance": "A short paragraph on how the scan worked, the criteria, and the postures "
+                         "(enter, watch, and deepen)."},
+            {"heading": "The map at a glance",
+             "guidance": "Describe the shape, how many themes are deepen (the existing work), how "
+                         "many carry the enter posture, how many sit at watch, and the logic that "
+                         "runs through the entry set."},
+            {"heading": "The leading approaches",
+             "guidance": "This is the heart of the memo. Lead with the two cleanest entry themes and "
+                         "give each the fullest treatment, then take the remaining entry themes in "
+                         "turn and treat each as a second-tier, tightly scoped brief. Give each theme "
+                         "SEVERAL developed paragraphs that lay out where the opening lies and why it "
+                         "stands open, the evidence with the named institutions and initiatives behind "
+                         "it drawn from the member details, who already holds the capital and the "
+                         "technical layer, how it advances the mandate read through the DEPTH lens "
+                         "(Diversification, Export competitiveness, Productivity, Technology "
+                         "upgrading, and Human well-being), the institute's distinctive contribution "
+                         "as the one defining the value-capture or institutional agenda, and a "
+                         "concrete first step. Do not reduce a theme to a single paragraph."},
+            {"heading": "What the institute already runs",
+             "guidance": "The existing, deepen themes, and for each the leading methods worth keeping "
+                         "current. Where a theme was held back to existing work by the portfolio "
+                         "screen, treat it here as current work to keep sharp, not as an opportunity."},
+            {"heading": "What to watch",
+             "guidance": "The watch themes, each with a clear line on what keeps it a step below the "
+                         "entry tier."},
+            {"heading": "Cross-cutting findings",
+             "guidance": "Develop the logic that ties the entry set together, and be honest that it "
+                         "is not a single idea: value capture is the spine of the sector themes, "
+                         "where Africa can retain more of the value it creates, while the themes "
+                         "about fragility and the delivery of development rest on a distinct "
+                         "institutional and delivery logic, so present these as two clear threads "
+                         "rather than forcing one over all of them. Then develop the pattern in where "
+                         "the capital and the technical capacity sit, and how the entry set maps onto "
+                         "the mandate."},
+            {"heading": "Risks and sequencing",
+             "guidance": "Name plainly what could go wrong across the entry set, that value-capture "
+                         "policy is politically demanding, that several of these sectors are crowded "
+                         "with funders, and that the institute's leverage is a convening and "
+                         "agenda-setting one in some themes, then set out a realistic sequence "
+                         "against a small team, what moves in the first quarter, what follows, and "
+                         "what waits."},
+            {"heading": "Conclusion and recommendations",
+             "guidance": "A sequenced set of concrete moves, ordered by readiness and effort."},
+        ],
+    },
 }
 
 
@@ -124,8 +217,151 @@ def scoring_text(spec: dict) -> str:
     return "\n".join(lines)
 
 
+def excluded_areas(spec: dict) -> list[dict]:
+    return spec.get("excluded_areas") or DEFAULT_SPEC["excluded_areas"]
+
+
+def excluded_text(spec: dict) -> str:
+    """The existing-portfolio list rendered for the agent frame, built from the SAME
+    data screen_existing() enforces, so what the model is told and what the code
+    checks are one list."""
+    lines = ["## Existing programs, treat as covered ground, never as new (posture deepen)",
+             "",
+             "The institute already works in these areas. A theme that falls in one of them is "
+             "existing and carries the deepen posture, never enter, and it is screened in code "
+             "after theming, so tagging it new does not get it past the gate:"]
+    for a in excluded_areas(spec):
+        lines.append(f"- {a['name']}: {', '.join(a.get('terms', []))}")
+    lines += ["",
+              "The goal is new areas to enter. An existing theme can never carry the enter "
+              "posture, only deepen."]
+    return "\n".join(lines)
+
+
 def scope_text(spec: dict) -> str:
-    return spec.get("context", "")
+    return spec.get("context", "") + "\n\n" + excluded_text(spec)
+
+
+# --- the existing-portfolio screen, enforced in code -----------------------------
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _singular(w: str) -> str:
+    """Crude singularization, applied to BOTH the text and the term, so 'regional
+    value chains' matches the term 'regional value chain' and 'policies' matches
+    'policy'. Being symmetric is what makes the crudeness safe: both sides land on
+    the same wrong stem, so nothing is missed and nothing new is matched."""
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 4 and w.endswith(("sses", "shes", "ches", "xes")):
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        return w[:-1]
+    return w
+
+
+def _norm_text(*parts) -> str:
+    """Lowercased, singularized word stream, space padded at both ends, so a plain
+    `in` test on a space-padded needle matches whole words only ('ai' hits
+    'AI-driven', never 'aid')."""
+    words = []
+    for p in parts:
+        if isinstance(p, (list, tuple)):
+            p = " ".join(str(x) for x in p)
+        words += [_singular(w) for w in _WORD.findall(str(p or "").lower())]
+    return " " + " ".join(words) + " "
+
+
+def _term_hits(text: str, terms: list[str]) -> list[str]:
+    hits = []
+    for t in terms:
+        needle = _norm_text(t)
+        if needle.strip() and needle in text:
+            hits.append(t)
+    return hits
+
+
+def screen_existing(themes: list[dict], spec: dict) -> list[dict]:
+    """Force any theme that lands in the institute's existing portfolio to
+    tag=existing, posture=deepen, and record why.
+
+    The model is asked to tag existing areas honestly and mostly does not, so this
+    is the gate rather than the request. Deliberately keyword based and not a model
+    call: an analyst can read the term list, argue with it, and edit it in the spec,
+    which is not true of a similarity score.
+
+    Confidence rule. A term in the theme's NAME is decisive on its own, because a
+    theme named for an existing area is that area. A term only in the rationale,
+    marquee, or member names screens only when two distinct terms hit, so one
+    passing mention of 'development finance' inside a long rationale does not kill a
+    genuinely new theme. A single body hit is recorded as a near miss instead, for
+    the analyst to look at.
+    """
+    for t in themes:
+        name = _norm_text(t.get("name", ""))
+        body = _norm_text(t.get("name", ""), t.get("rationale", ""), t.get("marquee", ""),
+                          t.get("members") or [])
+        matched, near = None, []
+        for a in excluded_areas(spec):
+            terms = a.get("terms", [])
+            in_name = _term_hits(name, terms)
+            in_body = _term_hits(body, terms)
+            if in_name:
+                matched = (a["name"], in_name[0], "name")
+                break
+            if len(in_body) >= 2:
+                matched = (a["name"], in_body[0], "rationale")
+                break
+            if in_body:
+                near.append(f"{a['name']} (\"{in_body[0]}\")")
+        if matched:
+            t["tag"], t["posture"], t["top2"] = "existing", "deepen", False
+            t["screened"] = (f"matched the existing portfolio: {matched[0]}, "
+                             f"on \"{matched[1]}\" in the theme {matched[2]}")
+        elif near:
+            t["screen_note"] = "sits near the existing portfolio: " + "; ".join(near[:3])
+    return themes
+
+
+# --- the memo's shape, one definition, two consumers -----------------------------
+def memo_spec(spec: dict) -> dict:
+    return spec.get("memo") or DEFAULT_SPEC["memo"]
+
+
+def memo_target_text(spec: dict) -> str:
+    """The length instruction shown to the model, DERIVED from the same word count
+    memo_shortfall() checks against, so the ask and the check cannot disagree."""
+    m = memo_spec(spec)
+    words = int(m.get("min_words", 4000))
+    pages = max(1, round(words / max(1, int(m.get("words_per_page", 450)))))
+    return f"at least about {pages} pages, roughly {words:,} words"
+
+
+def memo_sections_text(spec: dict) -> str:
+    lines = []
+    for s in memo_spec(spec).get("sections", []):
+        lines.append(f"## {s['heading']}")
+        if s.get("guidance"):
+            lines.append(s["guidance"])
+    return "\n".join(lines)
+
+
+def memo_shortfall(markdown: str, spec: dict) -> str:
+    """What the delivered memo is missing against the spec, or '' when it is whole.
+    The memos before this check ran a median of about three pages against a stated
+    eight to twelve, and nothing noticed."""
+    m = memo_spec(spec)
+    words = len(re.findall(r"\S+", markdown or ""))
+    floor = int(m.get("min_words", 4000))
+    headings = {h.strip().lower() for h in re.findall(r"^##\s+(.+?)\s*$", markdown or "", re.M)}
+    missing = [s["heading"] for s in m.get("sections", [])
+               if s["heading"].strip().lower() not in headings]
+    problems = []
+    if words < floor:
+        problems.append(f"{words:,} words against a floor of {floor:,}")
+    if missing:
+        problems.append("missing section(s): " + ", ".join(missing))
+    return "; ".join(problems)
 
 
 def criteria(spec: dict) -> list[dict]:

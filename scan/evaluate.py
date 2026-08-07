@@ -68,11 +68,14 @@ async def judge_memo(memo_text: str) -> dict:
               "active voice, serial comma, no em dashes, and no trace of any tool or AI. actionability: "
               "are the recommendations clear and specific. Mark each strong, partial, or weak, then an "
               "overall of strong, adequate, or weak, with notes.")
+    # tier="strong" or the cheap search model grades the strong model's prose on the
+    # OpenRouter path. Note the standing weakness: this is a same-family judge, so the
+    # trajectory eval above is the objective half and this is the softer one.
     return await structured_call(
         model=config.MODEL_OPUS,
         frame="You are an evaluation judge for a research institute. " + rubric,
         user="MEMO TO SCORE:\n\n" + memo_text,
-        schema=RUBRIC_SCHEMA,
+        schema=RUBRIC_SCHEMA, tier="strong",
     )
 
 

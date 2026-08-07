@@ -21,6 +21,10 @@ def main() -> None:
     sub.add_parser("init", help="write a sample input/organizations.xlsx")
     sub.add_parser("status", help="show progress and errors")
 
+    pr = sub.add_parser("prune", help="delete all but the newest run folders under runs/")
+    pr.add_argument("--keep", type=int, default=20, help="how many runs to keep (default 20)")
+    pr.add_argument("--dry-run", action="store_true", help="list what would go, delete nothing")
+
     ev = sub.add_parser("eval", help="trajectory eval on the golden set, and optionally judge a memo")
     ev.add_argument("--provider", choices=["anthropic", "openrouter"], default=None)
     ev.add_argument("--model", default=None, help="openrouter model id")
@@ -47,6 +51,13 @@ def main() -> None:
         return
     if args.cmd == "status":
         pipeline.status()
+        return
+    if args.cmd == "prune":
+        gone = pipeline.prune_runs(keep=args.keep, dry=args.dry_run)
+        verb = "would remove" if args.dry_run else "removed"
+        print(f"{verb} {len(gone)} run folder(s), keeping the newest {args.keep}")
+        for name in gone:
+            print(f"  {name}")
         return
     if args.cmd == "eval":
         if args.provider:

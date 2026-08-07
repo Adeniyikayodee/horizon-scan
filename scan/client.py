@@ -27,23 +27,76 @@ _client: AsyncAnthropic | None = None
 _or_client: Any = None
 
 # running token account for the process, so a run's spend is visible instead of blind
-USAGE = {"input": 0, "output": 0, "cache_read": 0, "calls": 0}
+USAGE = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "calls": 0}
 
 
-def _account(resp: Any) -> None:
+class TruncatedOutput(RuntimeError):
+    """The model hit its output cap before it finished writing.
+
+    Raised on BOTH providers, so the caller has one retry path rather than two. The
+    OpenRouter path used to surface this as a JSONDecodeError from a half-written
+    tool-call argument, which killed stage two instead of retrying with headroom.
+    """
+
+    def __init__(self, model: str, max_tokens: int) -> None:
+        super().__init__(f"{model}: hit the {max_tokens}-token output cap before finishing")
+        self.model = model
+        self.max_tokens = max_tokens
+
+
+# per-model account, so spend can be priced rather than only counted
+BY_MODEL: dict[str, dict[str, int]] = {}
+
+
+def _account(resp: Any, model: str = "") -> None:
     u = getattr(resp, "usage", None)
     if not u:
         return
-    USAGE["calls"] += 1
     # Anthropic fields; OpenRouter (OpenAI shape) uses prompt_/completion_tokens
-    USAGE["input"] += getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", 0) or 0
-    USAGE["output"] += getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", 0) or 0
-    USAGE["cache_read"] += getattr(u, "cache_read_input_tokens", 0) or 0
+    got = {
+        "calls": 1,
+        "input": getattr(u, "input_tokens", None) or getattr(u, "prompt_tokens", 0) or 0,
+        "output": getattr(u, "output_tokens", None) or getattr(u, "completion_tokens", 0) or 0,
+        "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+        "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0,
+    }
+    for k, v in got.items():
+        USAGE[k] += v
+    per = BY_MODEL.setdefault(model or "unknown", dict.fromkeys(got, 0))
+    for k, v in got.items():
+        per[k] += v
+
+
+def cost_usd() -> tuple[float, list[str]]:
+    """(priced spend in dollars, the models with no price on file). Reported per
+    model, because a run mixes a cheap search model with an expensive writing one and
+    a single blended rate would be fiction. Anything unpriced is named rather than
+    guessed at."""
+    total, unpriced = 0.0, []
+    for model, u in BY_MODEL.items():
+        price = config.PRICES.get(model)
+        if not price:
+            unpriced.append(model)
+            continue
+        pin, pout = price
+        billed_in = max(0, u["input"] - u["cache_read"] - u["cache_write"])
+        total += (billed_in * pin
+                  + u["cache_read"] * pin * config.CACHE_READ_MULT
+                  + u["cache_write"] * pin * config.CACHE_WRITE_MULT
+                  + u["output"] * pout) / 1_000_000
+    return round(total, 4), sorted(unpriced)
 
 
 def usage_line() -> str:
-    return (f"{USAGE['calls']} model calls, {USAGE['input']:,} input tokens "
-            f"({USAGE['cache_read']:,} from cache), {USAGE['output']:,} output tokens")
+    line = (f"{USAGE['calls']} model calls, {USAGE['input']:,} input tokens "
+            f"({USAGE['cache_read']:,} from cache, {USAGE['cache_write']:,} written to cache), "
+            f"{USAGE['output']:,} output tokens")
+    priced, unpriced = cost_usd()
+    if priced:
+        line += f", about ${priced:,.2f}"
+    if unpriced:
+        line += f" (no price on file for {', '.join(unpriced)}, so its cost is not counted)"
+    return line
 
 
 def client() -> AsyncAnthropic:
@@ -104,20 +157,30 @@ async def _openrouter_call(
         tool_choice={"type": "function", "function": {"name": "record"}},
         extra_body=body or None,
     )
-    _account(resp)
+    _account(resp, or_model or config.OR_MODEL)
+    name = or_model or config.OR_MODEL
     if not getattr(resp, "choices", None):
-        raise RuntimeError(f"openrouter {or_model or config.OR_MODEL}: empty response (no choices)")
-    msg = resp.choices[0].message
+        raise RuntimeError(f"openrouter {name}: empty response (no choices)")
+    choice = resp.choices[0]
+    # the model ran out of room mid-write: tell the caller so, rather than letting a
+    # half-written tool-call argument surface as an opaque JSON error
+    if getattr(choice, "finish_reason", "") == "length":
+        raise TruncatedOutput(f"openrouter {name}", max_tokens)
+    msg = choice.message
     if getattr(msg, "tool_calls", None):
         args = msg.tool_calls[0].function.arguments
         if args:
-            return json.loads(args)
+            try:
+                return json.loads(args)
+            except json.JSONDecodeError:
+                # a truncated argument string is the usual cause, and it is recoverable
+                raise TruncatedOutput(f"openrouter {name}", max_tokens) from None
     if getattr(msg, "content", None):
         try:
             return json.loads(msg.content)
         except Exception:
             pass
-    raise RuntimeError(f"openrouter {or_model or config.OR_MODEL}: no valid structured output returned")
+    raise RuntimeError(f"openrouter {name}: no valid structured output returned")
 
 
 def record_tool(schema: dict[str, Any]) -> dict[str, Any]:
@@ -192,13 +255,11 @@ async def structured_call(
             tools=[rec],
             tool_choice={"type": "tool", "name": "record"},
         )
-        _account(resp)
+        _account(resp, model)
         out = _find_record(resp.content)
         if out is None:
             if resp.stop_reason == "max_tokens":
-                raise RuntimeError(
-                    f"{model}: hit the {max_tokens}-token limit before finishing (truncated), "
-                    "raise max_tokens")
+                raise TruncatedOutput(model, max_tokens)
             raise RuntimeError(f"{model}: model did not call record ({resp.stop_reason})")
         if resp.stop_reason == "max_tokens":
             out["_truncated"] = True     # the caller can retry with more headroom
@@ -216,7 +277,7 @@ async def structured_call(
             tools=tools,
             tool_choice={"type": "auto"},
         )
-        _account(resp)
+        _account(resp, model)
         out = _find_record(resp.content)
         if out is not None:
             return out
@@ -238,7 +299,7 @@ async def structured_call(
             tools=[rec],
             tool_choice={"type": "tool", "name": "record"},
         )
-        _account(forced)
+        _account(forced, model)
         out = _find_record(forced.content)
         if out is None:
             raise RuntimeError(f"{model}: could not force a record call")

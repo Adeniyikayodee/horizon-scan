@@ -14,9 +14,13 @@ on top.
 
 ## Memo shape
 
-Two to three pages: the leading approaches grouped by theme with their postures,
-the new and adjacent areas worth taking forward, and the open questions. Lead
-with the two cleanest new areas.
+The memo's length and its section list are set in one place, the scan spec's
+`memo` block, and they are rendered into the writing instructions and checked
+against the delivered memo from that same definition. Do not restate a length
+here: a second statement is how the two drifted apart before, and the shorter one
+won. What holds regardless of the section list: the memo leads with the two
+cleanest new areas, groups the leading approaches by theme with their postures,
+and is honest about the open questions.
 
 ## Voice and framing
 

@@ -22,8 +22,10 @@ without touching the code.
 
 Per organization, a fixed sequence runs, one agent per step. The Scout finds the
 organization's candidate programs. The Librarian finds the organization's own
-reports and briefs. The Reader reads the actual report rather than the landing
-page and extracts a single approach with exact quotes. The Scorer marks it on the
+reports and briefs. The Reader reads the opening sections of the report itself,
+rather than the landing page, and extracts a single approach with exact quotes. A
+long report runs past the reading window, so each row records how much of its
+source was actually read and says so when it saw only part. The Scorer marks it on the
 criteria. The Verifier opens the same document and tries to disconfirm the claim.
 An Auditor then checks the whole chain for consistency.
 
@@ -56,14 +58,17 @@ python -m scan run --stage 1     # scan, score, verify  -> review/
 python -m scan run --stage 2     # themes and memo       -> out/
 python -m scan status            # per-organization progress and errors
 python -m scan eval              # retrieval quality on the golden set
+python -m scan prune --keep 20   # delete all but the newest run folders
 
 python -m scan run --stage 1 --dry-run        # test mode, no key and no cost
 python -m scan run --stage 1 --scope global   # any region, not only Africa
 ```
 
-Stage one is resumable. Each organization is cached in `work/orgs/<id>.jsonl`, so
-a re-run only scans what it has not done. Delete an organization's file to force a
-re-scan.
+Stage one is resumable. Each organization is cached in
+`work/orgs/<name>-<hash>.jsonl`, keyed on the organization's name, so a re-run only
+scans what it has not done. Reordering, inserting, or deleting rows in the sheet is
+safe, the cache follows the organization rather than the row. Renaming an
+organization forces a re-scan, as does deleting its file.
 
 ## The web app
 
@@ -129,6 +134,11 @@ markup on usage, and adds about 5.5 percent only when you top up credits.
 - Strong model, Claude Sonnet 4, reads the reports and writes, about $3 and $15 per
   million, and is the main cost.
 
+Each stage prints its own spend, priced per model from the table in `config.PRICES`
+and including the tokens written to and read from the cache. A model with no price
+on file is named rather than guessed at, so the figure is never quietly wrong; add
+one with `SCAN_PRICES={"model-id": [input, output]}`.
+
 A measured run of 20 self-discovered organizations cost $2.52 ($2.24 on Sonnet 4,
 $0.28 on gpt-4o-mini), about $0.13 per organization. As a guide, and these are
 estimates on current prices:
@@ -162,18 +172,35 @@ Two different things, and they behave differently across runs:
 `input/organizations.xlsx`, one row per organization. Columns: `id`, `name`,
 `type`, `region`. Only `name` is required.
 
-## The context files
+## Where the scan-specific content lives
 
-Everything scan-specific lives in `context/`. Edit these, not the code.
+Two places, and it matters which. Anything the code also enforces lives in the scan
+spec, `scan/spec.py`, as data, so the instruction the model reads and the check the
+code runs are generated from one definition and cannot drift apart. Everything else
+is a markdown file in `context/`.
+
+In the spec (`DEFAULT_SPEC`, editable per run and saved to `work/spec.json`):
+
+| Key | Controls | Also enforced by |
+|---|---|---|
+| `research_question`, `lenses` | the mission, the two lenses, the DEPTH frame | |
+| `criteria` | the criteria, their weights, the marks | the scoring and theming schemas |
+| `context` | the standing rules | |
+| `excluded_areas` | the institute's existing portfolio | `spec.screen_existing`, after theming |
+| `memo` | the memo's length and its section list | `spec.memo_shortfall`, after synthesis |
+
+In `context/`:
 
 | File | Controls |
 |---|---|
-| `mission.md` | the two lenses, the DEPTH frame, and the over-the-horizon definition |
-| `scope.md` | the standing rules and the existing-programs exclusion list |
-| `scoring.md` | the criteria, the marks, and the posture rules |
 | `themes.md` | how themes are tagged and kept tight |
-| `output_spec.md` | the row and scorecard schema, and the house style |
+| `output_spec.md` | the row and scorecard schema, the voice, and the house style |
 | `policy.md` | the non-negotiables the guardrail enforces |
+| `exemplar.md` | the gold-standard register and depth to match |
+| `mission_global.md` | the mission text used when the scope is global |
+
+`mission.md`, `scope.md`, and `scoring.md` are historical: their content moved into
+the spec and they are no longer read. Editing them changes nothing.
 
 ## Tests
 
