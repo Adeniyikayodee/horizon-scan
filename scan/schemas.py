@@ -28,6 +28,7 @@ class Candidate(BaseModel):
 
 class Reading(BaseModel):
     keep: bool
+    keep_reason: str = ""      # why kept or dropped, so every drop is auditable
     band: Literal["frontier", "emerging", "maturing"] = "emerging"  # over-the-horizon band
     what: str = ""
     evidence: str = ""
@@ -119,9 +120,15 @@ SCOUT_SCHEMA = {
 
 READER_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["keep", "band", "what", "evidence", "uptake", "quotes", "locator", "verbatim", "access_note"],
+    "required": ["keep", "keep_reason", "band", "what", "evidence", "uptake", "quotes",
+                 "locator", "verbatim", "access_note"],
     "properties": {
-        "keep": {"type": "boolean", "description": "False if the page is thin or off-lens."},
+        "keep": {"type": "boolean",
+                 "description": "True unless the document names no program, carries no concrete "
+                                "evidence, or is off-lens. Earliness is not a reason to drop."},
+        "keep_reason": {"type": "string",
+                        "description": "One plain line on why, required either way, because every "
+                                       "drop is reviewed."},
         "band": {"type": "string", "enum": ["frontier", "emerging", "maturing"],
                  "description": "frontier: researched/debated, not yet in mainstream policy. "
                                 "emerging: in policy experimentation (pilots, new legislation, funder "

@@ -157,7 +157,7 @@ def _pdf_to_text(data: bytes) -> str:
         reader = pypdf.PdfReader(io.BytesIO(data))
         out = []
         for i, page in enumerate(reader.pages):
-            if i >= 80:            # cap very long reports
+            if i >= config.PDF_MAX_PAGES:     # cap very long reports
                 break
             out.append(page.extract_text() or "")
         return "\n".join(out)
@@ -227,7 +227,7 @@ def _extract_full(url: str) -> str:
             text = _pdf_to_text(data)
         elif ctype in ("text/html", "text/plain", "application/xhtml+xml", ""):
             text = _html_to_text(data.decode("utf-8", "ignore"))
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()[:400000]
+        text = re.sub(r"\n{3,}", "\n\n", text).strip()[:config.EXTRACT_MAX_CHARS]
     # bot-protected, JS-rendered, or too thin to be the real document: try the proxy,
     # but only trust proxy content that is a real document, not a wrapped error page
     if len(text) < 500:
@@ -328,19 +328,30 @@ def link_dead(url: str) -> bool:
     return link_status(url) == "dead"
 
 
-def fetch_text(url: str, max_chars: int = 60000) -> str:
-    """The full readable text of the source, HTML stripped or PDF extracted, or
-    '' if it could not be read. Cached per URL so the Reader's read and the
-    Verifier's grounding fetch the same report once, not twice."""
+def fetch_text_with_meta(url: str, max_chars: int | None = None) -> tuple[str, int]:
+    """The readable text of the source capped at max_chars, AND the full extracted
+    length, so a caller can say honestly how much of the document it actually saw.
+
+    A long flagship report runs well past the Reader's window, so "read the report"
+    has always meant "read the opening sections of it". That is a reasonable design,
+    but it has to be recorded rather than implied. Cached per URL so the Reader's
+    read and the Verifier's grounding fetch the same report once, not twice."""
     if not url:
-        return ""
+        return "", 0
     full = _TEXT_CACHE.get(url)
     if full is None:
         full = _extract_full(url)
         if len(_TEXT_CACHE) >= 64:
             _TEXT_CACHE.clear()
         _TEXT_CACHE[url] = full
-    return full[:max_chars]
+    cap = config.READ_MAX_CHARS if max_chars is None else max_chars
+    return full[:cap], len(full)
+
+
+def fetch_text(url: str, max_chars: int | None = None) -> str:
+    """The readable text of the source, capped. See fetch_text_with_meta when the
+    caller needs to know how much of the document it did not see."""
+    return fetch_text_with_meta(url, max_chars)[0]
 
 
 def quote_grounded(url: str, quote: str):

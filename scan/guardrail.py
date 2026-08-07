@@ -84,6 +84,30 @@ def settle_row(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def evidence_check(row: dict[str, Any]) -> str:
+    """How firm a "verified" actually is.
+
+    Two very different things reached the workbook as the same word. Either a quote
+    was fetched from the cited source and found in it, or the source could not be
+    read at all and "verified" rests on the model's assertion alone. Both printed
+    "verified". Across the archived runs the second case was the majority, so the
+    distinction is not academic.
+
+      "checked"   : a quote was located in the fetched source
+      "unchecked" : verified, but nothing could be fetched to confirm it
+      ""          : the row is partial, the status already says enough
+
+    The verification.status vocabulary is deliberately untouched. Two consumers
+    parse that string, the stage-two rejoin and the app's verified counter, and
+    both break if it changes, so the firmness rides in its own column.
+    """
+    if (row.get("verification") or {}).get("status") != "verified":
+        return ""
+    if row.get("quote_grounded") is True or row.get("reading_grounded") is True:
+        return "checked"
+    return "unchecked"
+
+
 def scan_text(text: str) -> list[str]:
     """Return any policy violations found in a block of deliverable text. Tool and
     model names match as substrings; AI-trace and retrieval phrases match with word
@@ -108,12 +132,70 @@ def scan_text(text: str) -> list[str]:
 
 
 def scrub(text: str) -> str:
-    """Best-effort cleanup for house style: replace every long-dash glyph with a comma."""
+    """Mechanical cleanup only: replace every long-dash glyph with a comma.
+
+    DESIGN RULE, do not widen this. scrub may only fix things where the repair is
+    purely typographic and the meaning cannot move. It must never regex-delete a
+    banned phrase out of prose, because "the memo no longer says the forbidden
+    thing" and "the memo still means what it meant" are different properties, and
+    only a person can hold both. Semantic violations are surfaced by finalize() for
+    a human to rewrite, never silently patched.
+    """
     text = re.sub(rf"\s*[{_DASHES}]\s*", ", ", text)
     return text
 
 
+def finalize(label: str, text: str) -> tuple[str, list[str]]:
+    """Scrub what is mechanically safe, then report what remains.
+
+    This is the entry point for deliverable text. It is deliberately NOT fatal: by
+    the time a memo exists the run has already been paid for, so a banned phrase
+    must degrade into a note for the analyst, not throw away the whole stage. The
+    caller writes every artifact and records the violations alongside them.
+    """
+    text = scrub(text)
+    return text, scan_text(text)
+
+
+def context_for(text: str, hit: str, width: int = 120) -> str:
+    """The sentence around a violation, so the analyst can find and rewrite it
+    without hunting. Empty when the token cannot be located."""
+    token = hit.split(": ", 1)[-1].strip()
+    if not token:
+        return ""
+    i = text.lower().find(token.lower())
+    if i < 0:
+        return ""
+    start, end = max(0, i - width), min(len(text), i + len(token) + width)
+    return ("..." if start else "") + text[start:end].replace("\n", " ") + ("..." if end < len(text) else "")
+
+
+def title_notes(markdown: str) -> list[str]:
+    """Soft style checks on the memo's title. Warn only, never rewrite.
+
+    output_spec asks for a plain, specific name in the reader's own terms, and the
+    memos came back as "AI-Driven Policy Platforms and Market Shaping: New Frontiers
+    for African Economic Transformation". A title is one line a person can fix in
+    five seconds, so this reports rather than touches it."""
+    m = re.search(r"^#\s+(.+?)\s*$", markdown or "", re.M)
+    if not m:
+        return ["title note: the memo has no top-level title"]
+    title = m.group(1).strip()
+    notes = []
+    if ":" in title:
+        notes.append(f'title note: the title uses a colon, house style asks for a plain, '
+                     f'specific name: "{title}"')
+    words = [w for w in title.split() if len(w) > 3]
+    capped = [w for w in words if w[:1].isupper()]
+    if len(words) >= 4 and len(capped) >= len(words) - 1:
+        notes.append(f'title note: the title is in title case, house style is sentence '
+                     f'case: "{title}"')
+    return notes
+
+
 def assert_clean(label: str, text: str) -> None:
+    """Strict form, used by tests and by any caller that genuinely wants to fail.
+    The pipeline uses finalize() instead, so a violation never destroys a paid run."""
     hits = scan_text(text)
     if hits:
         raise ValueError(f"policy violation in {label}: {'; '.join(hits)}")

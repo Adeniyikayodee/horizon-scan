@@ -17,7 +17,7 @@ import uuid
 import pandas as pd
 import streamlit as st
 
-from scan import agents, client, config, io_xlsx, pdf_out, pipeline, sources, spec
+from scan import agents, client, config, guardrail, io_xlsx, pdf_out, pipeline, sources, spec
 
 
 def _secret(key: str, default: str = "") -> str:
@@ -216,8 +216,14 @@ def card_html(r: dict) -> str:
     v = r.get("verification", {}) or {}
     a = r.get("audit", {}) or {}
     status = v.get("status", "")
-    chip = ('<span class="hs-chip ok">verified</span>' if status == "verified"
-            else '<span class="hs-chip partial">partial</span>')
+    # "verified" alone hid two different things: a quote found in the fetched source,
+    # and a claim nothing could be fetched to confirm. Say which.
+    ec = guardrail.evidence_check(r)
+    chip = ('<span class="hs-chip ok">verified, confirmed against the source</span>'
+            if ec == "checked" else
+            '<span class="hs-chip partial">verified, on the reading alone</span>'
+            if ec == "unchecked" else
+            '<span class="hs-chip partial">partial</span>')
     flagchip = '<span class="hs-chip flag">flagged</span>' if r.get("flagged") else ""
     band = r.get("band", "")
     bandchip = f'<span class="hs-tag" style="text-transform:uppercase;letter-spacing:.1em">{band}</span>' if band else ""
@@ -311,6 +317,7 @@ def dossier_md(r: dict) -> str:
          f"- Organization: {r.get('org','')}", f"- Year: {r.get('year','')}",
          f"- Band: {r.get('band','')}",
          f"- Overall fit: {r.get('overall','')}", f"- Verification: {v.get('status','')}",
+         f"- Evidence check: {guardrail.evidence_check(r) or 'not applicable, the row is partial'}",
          f"- Flagged for review: {'yes' if r.get('flagged') else 'no'}",
          f"- Source: {r.get('url','')}  ({r.get('source_type','')})", "",
          "## What it is", r.get("what", ""), "",

@@ -33,6 +33,24 @@ def _norm_org(name: str) -> str:
     return " ".join(kept or toks).strip()
 
 
+# Articles only. A PROGRAM name is not an organization name: "Fund", "Institute",
+# "Initiative", and "Foundation" are the words that tell two real programs apart,
+# so the organization stop list must never be used on one.
+_APPROACH_STOP = {"the", "and", "of", "for", "a", "an"}
+
+
+def _norm_approach(name: str) -> str:
+    """The matching key for a PROGRAM name. Parentheticals and punctuation are
+    dropped, so "Blue Economy Program (PROFISHBLUE)" still collapses onto "Blue
+    Economy Program", but every descriptor word is kept, so "Blue Economy Fund" and
+    "Blue Economy Initiative" stay two programs. Deliberately not _norm_org: that
+    one strips exactly the words this one needs."""
+    s = re.sub(r"\([^)]*\)", " ", (name or "").lower())
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    toks = [t for t in s.split() if t not in _APPROACH_STOP]
+    return " ".join(toks).strip()
+
+
 def _org_sig(name: str) -> dict:
     """A match signature: the normalized full name, the acronym the organization
     DECLARES in parentheses, the acronym DERIVED from its initials, and whether the
@@ -171,7 +189,8 @@ def write_longlist(rows: list[dict[str, Any]]) -> Path:
     ws.title = "longlist"
     crit = config.active_spec().get("criteria", [])
     cols = (["rid", "keep", "org", "approach", "band", "what", "year"]
-            + [c["name"] for c in crit] + ["overall", "verification", "source"])
+            + [c["name"] for c in crit]
+            + ["overall", "verification", "evidence check", "source"])
     ws.append(cols)
     for i, r in enumerate(rows, start=1):
         r.setdefault("rid", f"R{i:04d}")                 # stable id for the stage-2 rejoin
@@ -180,7 +199,8 @@ def write_longlist(rows: list[dict[str, Any]]) -> Path:
         row = [r["rid"], "Y", r.get("org", ""), r.get("name", ""), r.get("band", ""),
                r.get("what", ""), r.get("year", "")]
         row += [s.get(c["key"], "") for c in crit]
-        row += [s.get("overall", ""), v.get("status", ""), r.get("url", "")]
+        row += [s.get("overall", ""), v.get("status", ""),
+                guardrail.evidence_check(r), r.get("url", "")]
         ws.append(row)
     _stamp(wb)
     wb.save(path)
@@ -239,10 +259,34 @@ def write_open_questions(rows: list[dict[str, Any]], dropped: list[dict[str, Any
     lines.append("## Partial, needs a primary\n")
     for r in partial:
         note = (r.get("verification", {}) or {}).get("note", "")
-        lines.append(f"- {r.get('org','')}: {r.get('name','')} — {note}")
-    lines.append("\n## Dropped at reading\n")
+        lines.append(f"- {r.get('org','')}: {r.get('name','')}, {note}")
+    lines.append("\n## Set aside, and why\n")
+    lines.append("Every candidate that did not make the longlist, with the stage it went at "
+                 "and the reason. A drop here is never seen again, so it is worth a look when "
+                 "the list is long.\n")
     for d in dropped:
-        lines.append(f"- {d.get('org','')}: {d.get('name','')}")
+        stage = d.get("stage", "") or "not kept at reading"
+        reason = d.get("reason", "") or "no reason given"
+        lines.append(f"- {d.get('org','')}: {d.get('name','')} [{stage}] {reason}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def write_theme_screen(themes: list[dict[str, Any]]) -> Path:
+    """What the existing-portfolio screen did, so the analyst can see and argue with
+    it. A theme held back here is not a failure of the scan, it is the scan refusing
+    to recommend work the institute already runs. Edit the spec's excluded_areas to
+    change the call, never the code."""
+    path = config.REVIEW_DIR / "theme_screen.md"
+    held = [t for t in themes if t.get("screened")]
+    near = [t for t in themes if t.get("screen_note") and not t.get("screened")]
+    lines = ["# Existing-portfolio screen\n",
+             f"{len(held)} theme(s) held back to existing work, {len(near)} near the line.\n",
+             "## Held back to existing work, posture deepen\n"]
+    lines += [f"- {t.get('name','')}: {t['screened']}" for t in held] or ["- none"]
+    lines += ["\n## Near the line, left as the model tagged them\n"]
+    lines += [f"- {t.get('name','')} [{t.get('tag','')}, {t.get('posture','')}]: {t['screen_note']}"
+              for t in near] or ["- none"]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -261,8 +305,34 @@ def write_hunches(patterns: list[dict[str, str]]) -> Path:
 
 
 # --- deliverables (stage 2 out) ---
+def write_policy_violations(items: list[tuple[str, str, list[str]]]) -> Path | None:
+    """Record any policy violation left after the mechanical scrub, next to the
+    delivered files rather than instead of them. Returns None when everything is
+    clean, and removes a stale file from an earlier run so the absence of the file
+    always means a clean run."""
+    path = config.REVIEW_DIR / "policy_violations.md"
+    flagged = [(label, text, hits) for label, text, hits in items if hits]
+    if not flagged:
+        path.unlink(missing_ok=True)
+        return None
+    lines = ["# Policy violations\n",
+             "These were found in the delivered files. The files were written anyway, "
+             "so nothing is lost, but each line below needs rewriting by hand before "
+             "the work goes out. A machine must not fix these: removing the words and "
+             "keeping the meaning are two different jobs.\n"]
+    for label, text, hits in flagged:
+        lines.append(f"## {label}\n")
+        for h in hits:
+            lines.append(f"- **{h}**")
+            ctx = guardrail.context_for(text, h)
+            if ctx:
+                lines.append(f"  > {ctx}")
+        lines.append("")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def write_scorecard(themes: list[dict[str, Any]], intro: str) -> Path:
-    guardrail.assert_clean("scorecard_intro", intro)
     path = config.OUT_DIR / "theme_scorecard.xlsx"
     wb = Workbook()
     ws = wb.active
@@ -290,12 +360,14 @@ def write_map(rows: list[dict[str, Any]], themes: list[dict[str, Any]]) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = "Scan"
-    ws.append(["Theme", "Approach", "Band", "What", "Year", "Overall", "Verification", "Source"])
+    ws.append(["Theme", "Approach", "Band", "What", "Year", "Overall", "Verification",
+               "Evidence check", "Source"])
     for r in rows:
         ws.append([
             member_theme.get(r.get("name", ""), ""), r.get("name", ""), r.get("band", ""),
             r.get("what", ""), r.get("year", ""), r.get("overall", ""),
-            (r.get("verification", {}) or {}).get("status", ""), r.get("url", ""),
+            (r.get("verification", {}) or {}).get("status", ""),
+            guardrail.evidence_check(r), r.get("url", ""),
         ])
     _stamp(wb)
     wb.save(path)
@@ -303,7 +375,9 @@ def write_map(rows: list[dict[str, Any]], themes: list[dict[str, Any]]) -> Path:
 
 
 def write_memo(markdown: str) -> Path:
-    guardrail.assert_clean("synthesis_memo", markdown)
+    # Not gated here. The policy check runs in run_stage2 BEFORE any write, so a
+    # violation produces a note beside the deliverables instead of an exception that
+    # destroys a run already paid for. See guardrail.finalize.
     path = config.OUT_DIR / "synthesis_memo.md"
     path.write_text(markdown.rstrip() + "\n", encoding="utf-8")
     return path

@@ -65,6 +65,39 @@ DRY_RUN = os.environ.get("SCAN_DRY_RUN", "").lower() in ("1", "true", "yes")
 # Ground the verifier: fetch the source and check the confirming quote is in it.
 GROUND_QUOTES = os.environ.get("GROUND_QUOTES", "1").lower() in ("1", "true", "yes")
 
+# Report the reading gate's drop rate once it passes this share. The gate is one
+# model boolean and its rate has swung from 0 to 79 percent on identical code, so a
+# high rate is worth a person's attention. Reported, never auto-retried.
+DROP_RATE_WARN = float(os.environ.get("DROP_RATE_WARN", "0.5"))
+
+# --- how much of a source document is actually read ---
+# These were three magic numbers spread across two files, which let the README claim
+# the Reader "reads the actual report" while it saw roughly the opening 15 to 20 pages
+# of a long one. Named, tunable in one place, and recorded on every row.
+READ_MAX_CHARS = int(os.environ.get("READ_MAX_CHARS", "60000"))      # what the Reader sees
+VERIFY_MAX_CHARS = int(os.environ.get("VERIFY_MAX_CHARS", "40000"))  # what the Verifier sees
+EXTRACT_MAX_CHARS = int(os.environ.get("EXTRACT_MAX_CHARS", "400000"))  # what is extracted at all
+PDF_MAX_PAGES = int(os.environ.get("PDF_MAX_PAGES", "80"))           # pages pulled from a PDF
+
+# --- prices, US dollars per million tokens, (input, output) ---
+# Only models with an entry here are priced. Anything else is reported in tokens
+# with its cost left unstated, because a made-up price is worse than no price. Add
+# or override with SCAN_PRICES as JSON: {"model-id": [input, output]}.
+PRICES: dict[str, tuple[float, float]] = {
+    "openai/gpt-4o-mini": (0.15, 0.60),
+    "anthropic/claude-sonnet-4": (3.00, 15.00),
+}
+try:
+    import json as _json
+    PRICES.update({k: (float(v[0]), float(v[1]))
+                   for k, v in _json.loads(os.environ.get("SCAN_PRICES", "{}")).items()})
+except Exception:
+    pass
+# Anthropic's published cache multipliers against the input price: a cache read is
+# a tenth, a cache write is a quarter more.
+CACHE_READ_MULT = 0.1
+CACHE_WRITE_MULT = 1.25
+
 # Scan scope: "africa" (default) or "global" (any region/actor, transfer-to-Africa noted).
 SCAN_MODE = os.environ.get("SCAN_MODE", "africa")
 

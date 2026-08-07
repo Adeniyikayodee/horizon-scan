@@ -33,6 +33,8 @@ def _read(subj: str, h: int) -> dict[str, Any]:
     band = ["emerging", "frontier", "maturing"][h % 3]
     print(f"  read     {subj[:48]}  keep={keep} band={band}")
     return {"keep": keep, "band": band,
+            "keep_reason": ("Names a program and carries a measured result." if keep
+                            else "No named program and no concrete result on the page."),
             "what": "An approach that adds value in a new sector.",
             "evidence": "A pilot showed measurable gains in output and jobs.",
             "uptake": "One government has begun to adopt it.",
@@ -121,18 +123,44 @@ def _themes(user: str) -> dict[str, Any]:
             d[c["key"]] = mark
         return d
 
+    # Two of these are deliberately NON-compliant, so the dry run exercises the gates
+    # rather than a set already in the right shape. The third is tagged existing but
+    # asks to enter, which spec.coerce_theme must correct. The fourth is tagged new but
+    # names work the institute already runs, which spec.screen_existing must catch,
+    # and which is exactly what shipped in run 4be936d649.
     return {"themes": [
         theme("Blue economy and coastal value addition", "new", "enter", "strong", members[:3], True),
         theme("Sovereign and strategic investment funds", "adjacent", "enter", "partial", members[3:5], True),
-        theme("Financing Africa's future", "existing", "deepen", "strong", members[5:7], False)]}
+        theme("Financing Africa's future", "existing", "enter", "strong", members[5:7], False),
+        theme("AI-driven policy experimentation platforms", "new", "enter", "strong", members[7:9], True)]}
+
+
+_FILLER = (
+    "The scan points to two clean new areas, the blue economy and coastal value addition, and "
+    "sovereign and strategic investment funds, and both turn on Africa keeping more of the value "
+    "it creates in a sector it is only now entering. The capital and the technical knowledge "
+    "already sit with the financiers and the specialist providers, which leaves the question of "
+    "who captures the value open, and that question is the institute's to define and own. Read "
+    "through the DEPTH lens, the opening advances diversification into a new productive sector, "
+    "export competitiveness in processed goods, and productivity across the coastal value chain, "
+    "so the mandate fit is direct and the ground is genuinely open. ")
 
 
 def _synth() -> dict[str, Any]:
+    """A memo shaped to the ACTIVE spec, so a dry run exercises the real structure and
+    the length floor rather than a stub that would fail its own check."""
     print("  synth    writing memo and scorecard intro")
-    memo = ("# Global scan, wrap-up\n\n"
-            "The scan points to two clean new areas, the blue economy and coastal value addition, and "
-            "sovereign and strategic investment funds. Both let Africa keep more of the value it creates.\n\n"
-            "## Open questions\n\nSeveral rows rest on secondary sources and need a primary to harden.")
+    sp = config.active_spec()
+    m = spec_mod.memo_spec(sp)
+    floor = int(m.get("min_words", 4000))
+    sections = m.get("sections", [])
+    # spread the floor across the sections, with a little headroom so the mock always
+    # clears its own gate even as the spec's section list changes
+    per = max(1, int(floor * 1.15 / max(1, len(sections)) / len(_FILLER.split())) + 1)
+    parts = ["# Global scan, a wrap-up on the new areas to enter", "", _FILLER.strip(), ""]
+    for s in sections:
+        parts += [f"## {s['heading']}", "", (_FILLER * per).strip(), ""]
+    memo = "\n".join(parts)
     return {"memo_markdown": memo,
             "scorecard_intro": "Themes scored on the criteria, with two clean new areas to enter first."}
 

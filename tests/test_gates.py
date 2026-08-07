@@ -202,3 +202,52 @@ def test_row_dedup_merges_normalized_variants_keeps_strongest():
     assert len(kept) == 2 and len(dupes) == 1
     blue = [r for r in kept if "Blue" in r["name"]][0]
     assert blue["verification"]["status"] == "verified"          # strongest survived
+
+
+# --- F2: a descriptor word distinguishes two real programs, it is not noise --------
+@pytest.mark.parametrize("a,b", [
+    ("Blue Economy Fund", "Blue Economy Initiative"),
+    ("Africa Climate Foundation", "Africa Climate Institute"),
+    ("Digital Skills Fund", "Digital Skills Foundation"),
+    ("Coastal Resilience Facility", "Coastal Resilience Fund"),
+])
+def test_row_dedup_does_not_merge_distinct_programs(a, b):
+    rows = [{"name": a, "org": "X", "verification": {"status": "verified"}},
+            {"name": b, "org": "Y", "verification": {"status": "partial"}}]
+    kept, dupes = P._dedup(rows)
+    assert len(kept) == 2 and not dupes, f"wrongly merged {a!r} and {b!r}"
+
+
+def test_norm_approach_keeps_descriptors_and_drops_parentheticals():
+    assert X._norm_approach("Blue Economy Program (PROFISHBLUE)") == "blue economy program"
+    assert X._norm_approach("Blue Economy Fund") != X._norm_approach("Blue Economy Initiative")
+    assert X._norm_approach("The Fund for Coastal Jobs") == "fund coastal jobs"
+
+
+def test_org_normalizer_is_unchanged_by_the_approach_fix():
+    # the roster matcher still strips descriptor words, that behavior is correct there
+    assert X._norm_org("Blue Economy Fund") == X._norm_org("Blue Economy Initiative")
+
+
+def test_replay_dedup_over_archived_runs():
+    """Free regression: every merge the new key makes across the archived runs must
+    be a parenthetical or casing variant, never two differently named programs."""
+    import glob
+    import json
+    suspicious = []
+    for f in glob.glob("runs/*/work/longlist_full.json"):
+        try:
+            rows = json.loads(open(f, encoding="utf-8").read())
+        except Exception:
+            continue
+        seen: dict[str, str] = {}
+        for r in rows:
+            k = X._norm_approach(r.get("name", "") or "")
+            if not k:
+                continue
+            if k in seen and seen[k].lower() != (r.get("name") or "").lower():
+                a, b = seen[k], r.get("name", "")
+                if a.split("(")[0].strip().lower() != b.split("(")[0].strip().lower():
+                    suspicious.append((f, a, b))
+            seen.setdefault(k, r.get("name", ""))
+    assert not suspicious, f"merges that are not simple variants: {suspicious[:5]}"
